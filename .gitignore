@@ -1,2 +1,8 @@
-/Debug/**
-/.settings/
+.settings
+.vscode
+Debug
+Drivers
+Middlewares
+.cproject
+.mxproject
+arm\ Debug.launch
