@@ -1,8 +1,11 @@
-.settings
-.vscode
-Debug
-Drivers
-Middlewares
+.settings/
+.vscode/
+Debug/
+Drivers/
+Middlewares/
+Release/
 .cproject
 .mxproject
-arm\ Debug.launch
+.project
+*.launch
+*.ld

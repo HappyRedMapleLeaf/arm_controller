@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdint.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -85,7 +86,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-	HAL_UART_Transmit(&huart2, "fuck\n", 5, HAL_MAX_DELAY);
+	HAL_UART_Transmit(&huart2, (uint8_t*) "fuck\n", 5, HAL_MAX_DELAY);
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
