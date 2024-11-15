@@ -30,8 +30,8 @@
 // USER BANK 1 REGISTERS
 
 // USER BANK 2 REGISTERS
-#define B2_ACCEL_CONFIG                0x14
-#define B2_GYRO_CONFIG_1               0x01
+#define B2_ACCEL_CONFIG                 0x14
+#define B2_GYRO_CONFIG_1                0x01
 
 // USER BANK 3 REGISTERS
 
