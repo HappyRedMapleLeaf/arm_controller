@@ -51,9 +51,19 @@
 // 0x38 - servo6 angle: double
 #define CMD_SET_ANGLE 0x01
 
-#define PRINT_BUF_SIZE 256
+// structure (0x00 to 0x3F):
+// 0x00 - command
+// 0x04 - servo0 pwm: uint32_t
+// 0x08 - servo1 pwm: uint32_t
+// 0x0C - servo2 pwm: uint32_t
+// 0x10 - servo3 pwm: uint32_t
+// 0x14 - servo4 pwm: uint32_t
+// 0x18 - servo5 pwm: uint32_t
+// 0x1C - servo6 pwm: uint32_t
+// 0x20 - unused
+#define CMD_SET_PWM 0x02
 
-#define M_2K_PI (2000.0 / M_PI)
+#define PRINT_BUF_SIZE 256
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -93,7 +103,8 @@ const osThreadAttr_t ReceiveUART_attributes = {
   .priority = (osPriority_t) osPriorityNormal2,
 };
 /* USER CODE BEGIN PV */
-char buf[PRINT_BUF_SIZE];
+char print_buf[PRINT_BUF_SIZE];
+uint32_t print_len;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -116,7 +127,37 @@ void StartReceiveUART(void *argument);
 /* USER CODE BEGIN 0 */
 uint8_t command[CMD_LEN];
 
-double arm_angles[7] = {0, 0, 0, 0, 0, 0, 0};
+double arm_angles[7] = {0, M_PI_2, M_PI_2, 0, 0, 0, 0};
+uint32_t arm_pwms[7] = {1500, 1500, 1500, 1500, 1500, 1500, 1500};
+
+/*
+if range is pi, shift is pi/2, then -pi/2 maps to 500, pi/2 maps to 2500
+nudge is for small adjustments in case the servo is not centered
+*/
+const double ranges[7] = { 3*M_PI/2*0.98, M_PI, 3*M_PI/2*0.98,        3*M_PI/2, M_PI,   M_PI,   M_PI   };
+const double shifts[7] = { 0,             0,    3*M_PI/2*0.49-M_PI/2, 3*M_PI/4, M_PI/2, M_PI/2, M_PI/2 };
+const double nudges[7] = { 0,             0,    0,                    0,        0,      0,      0      };
+
+void set_angles(double * angles, uint32_t * pwms)
+{
+    for (int i = 0; i < 7; i++)
+    {
+        pwms[i] = 500 + nudges[i] + (angles[i] + shifts[i]) * 2000.0 / ranges[i];
+    }
+}
+
+void set_pwms(uint32_t * pwms)
+{
+    // timer 3 PC6-1 PC7-2 PC8-3 PC9-4
+    // timer 4 PB6-1 PB8-3 PB9-4
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwms[0]);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pwms[1]);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pwms[2]);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pwms[3]);
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, pwms[4]);
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, pwms[5]);
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, pwms[6]);
+}
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
@@ -127,19 +168,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
     // Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-}
-
-void set_angles(double * angles)
-{
-    // timer 3 PC6-1 PC7-2 PC8-3 PC9-4
-    // timer 4 PB6-1 PB8-3 PB9-4
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 1600 + angles[0] * M_2K_PI);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 1600 + angles[1] * M_2K_PI);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1600 + angles[2] * M_2K_PI);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 1600 + angles[3] * M_2K_PI);
-    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 1600 + angles[4] * M_2K_PI * 2.0/3.0);
-    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 1600 + angles[5] * M_2K_PI * 2.0/3.0);
-    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 1600 + angles[6] * M_2K_PI * 2.0/3.0);
 }
 /* USER CODE END 0 */
 
@@ -180,6 +208,10 @@ int main(void)
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
 
     IMU_Init();
 
@@ -189,7 +221,8 @@ int main(void)
     HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 2\n", 15, HAL_MAX_DELAY);
     HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 3\n", 15, HAL_MAX_DELAY);
 
-    set_angles(arm_angles);
+    set_angles(arm_angles, arm_pwms);
+    set_pwms(arm_pwms);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -422,22 +455,24 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 1000;
+  sConfigOC.Pulse = 500 + nudges[0] + (arm_angles[0] + shifts[0]) * 2000.0 / ranges[0];
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
+  sConfigOC.Pulse = 500 + nudges[1] + (arm_angles[1] + shifts[1]) * 2000.0 / ranges[1];
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
+  sConfigOC.Pulse = 500 + nudges[2] + (arm_angles[2] + shifts[2]) * 2000.0 / ranges[2];
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.Pulse = 0;
+  sConfigOC.Pulse = 500 + nudges[3] + (arm_angles[3] + shifts[3]) * 2000.0 / ranges[3];
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -494,17 +529,19 @@ static void MX_TIM4_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
+  sConfigOC.Pulse = 500 + nudges[4] + (arm_angles[4] + shifts[4]) * 2000.0 / ranges[4];
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
+  sConfigOC.Pulse = 500 + nudges[5] + (arm_angles[5] + shifts[5]) * 2000.0 / ranges[5];
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
+  sConfigOC.Pulse = 500 + nudges[6] + (arm_angles[6] + shifts[6]) * 2000.0 / ranges[6];
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -619,7 +656,7 @@ void StartDefaultTask(void *argument)
                 who, temp, x_accel, y_accel, z_accel, x_rate, y_rate, z_rate);
         HAL_UART_Transmit(&huart2, (uint8_t *) print, strlen(print), HAL_MAX_DELAY);
 
-        osDelay(1000);
+        osDelay(5000);
     }
   /* USER CODE END 5 */
 }
@@ -637,7 +674,8 @@ void StartUpdateServos(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    set_pwms(arm_pwms);
+    osDelay(50);
   }
   /* USER CODE END StartUpdateServos */
 }
@@ -657,20 +695,34 @@ void StartReceiveUART(void *argument)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        if (command[0] == CMD_SET_ANGLE)
-        {
-            for (uint8_t i = 0; i < 7; i++)
-            {
-                uint8_t offset = 8 + i * 8;
-                arm_angles[i] = *((double *)&command[offset]);
-            }
+        switch (command[0]) {
+            case CMD_SET_ANGLE:
+                for (uint8_t i = 0; i < 7; i++)
+                {
+                    uint8_t offset = 8 + i * 8;
+                    arm_angles[i] = *((double *)&command[offset]);
+                }
+
+                set_angles(arm_angles, arm_pwms);
+
+                print_len = snprintf(print_buf, PRINT_BUF_SIZE, "cmd: %d\nnew servo angles: %f %f %f %f %f %f %f\n", command[0],
+                                    arm_angles[0], arm_angles[1], arm_angles[2], arm_angles[3], arm_angles[4], arm_angles[5], arm_angles[6]);
+                HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, HAL_MAX_DELAY);
+                break;
+            case CMD_SET_PWM:
+                for (uint8_t i = 0; i < 7; i++)
+                {
+                    uint8_t offset = 4 + i * 4;
+                    arm_pwms[i] = *((uint32_t *)&command[offset]);
+                }
+
+                uint16_t print_len = snprintf(print_buf, PRINT_BUF_SIZE, "cmd: %d\nnew servo pwms: %lu %lu %lu %lu %lu %lu %lu\n", command[0],
+                                    arm_pwms[0], arm_pwms[1], arm_pwms[2], arm_pwms[3], 
+                                    arm_pwms[4], arm_pwms[5], arm_pwms[6]);
+                HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, HAL_MAX_DELAY);
+            default:
+                break;
         }
-
-        uint16_t len = snprintf(buf, PRINT_BUF_SIZE, "new servo angles: %f %f %f %f %f %f %f\n",
-                            arm_angles[0], arm_angles[1], arm_angles[2], arm_angles[3], arm_angles[4], arm_angles[5], arm_angles[6]);
-        HAL_UART_Transmit(&huart2, (uint8_t *)buf, len, HAL_MAX_DELAY);
-
-        set_angles(arm_angles);
 
         HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
     }
