@@ -38,6 +38,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define UART_PRINT_DELAY 1
+
 #define CMD_LEN 64
 
 // structure (0x00 to 0x3F):
@@ -105,6 +107,7 @@ const osThreadAttr_t ReceiveUART_attributes = {
 /* USER CODE BEGIN PV */
 char print_buf[PRINT_BUF_SIZE];
 uint32_t print_len;
+volatile uint8_t uart_rx_complete = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -127,16 +130,20 @@ void StartReceiveUART(void *argument);
 /* USER CODE BEGIN 0 */
 uint8_t command[CMD_LEN];
 
+double arm_targets[7] = {0, M_PI_2, M_PI_2, 0, 0, 0, 0};
 double arm_angles[7] = {0, M_PI_2, M_PI_2, 0, 0, 0, 0};
-uint32_t arm_pwms[7] = {1500, 1500, 1500, 1500, 1500, 1500, 1500};
+double arm_speeds[7] = {0, 0, 0, 0, 0, 0, 0};
+uint32_t arm_pwms[7] = {0, 0, 0, 0, 0, 0, 0};
+const double tx_rate = 20.0; // ms
+const double max_speed_abs = M_PI_2 / 1000; // rad/ms
 
 /*
 if range is pi, shift is pi/2, then -pi/2 maps to 500, pi/2 maps to 2500
 nudge is for small adjustments in case the servo is not centered
 */
-const double ranges[7] = { 3*M_PI/2*0.98, M_PI, 3*M_PI/2*0.98,        3*M_PI/2, M_PI,   M_PI,   M_PI   };
-const double shifts[7] = { 0,             0,    3*M_PI/2*0.49-M_PI/2, 3*M_PI/4, M_PI/2, M_PI/2, M_PI/2 };
-const double nudges[7] = { 0,             0,    0,                    0,        0,      0,      0      };
+const double ranges[7] = { 3*M_PI/2*0.98, M_PI*1.03,   3*M_PI/2*0.98,        3*M_PI/2, M_PI,   M_PI,   M_PI   };
+const double shifts[7] = { 0,             M_PI*0.03/2, 3*M_PI/2*0.49-M_PI/2, 3*M_PI/4, M_PI/2, M_PI/2, M_PI/2 };
+const double nudges[7] = { 0,             0,           65,                   0,        50,     50,     0      };
 
 void set_angles(double * angles, uint32_t * pwms)
 {
@@ -161,13 +168,16 @@ void set_pwms(uint32_t * pwms)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (huart->Instance == USART2) {
+        uart_rx_complete = 1;
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    // Notify the task that an interrupt has occurred
-    vTaskNotifyGiveFromISR(ReceiveUARTHandle, &xHigherPriorityTaskWoken);
+        // Notify the task that an interrupt has occurred
+        vTaskNotifyGiveFromISR(ReceiveUARTHandle, &xHigherPriorityTaskWoken);
 
-    // Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        // Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
 }
 /* USER CODE END 0 */
 
@@ -215,11 +225,9 @@ int main(void)
 
     IMU_Init();
 
-    HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
-
-    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 1\n", 15, HAL_MAX_DELAY);
-    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 2\n", 15, HAL_MAX_DELAY);
-    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 3\n", 15, HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 1\n", 15, UART_PRINT_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 2\n", 15, UART_PRINT_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 3\n", 15, UART_PRINT_DELAY);
 
     set_angles(arm_angles, arm_pwms);
     set_pwms(arm_pwms);
@@ -640,21 +648,15 @@ void StartDefaultTask(void *argument)
     /* Infinite loop */
     for (;;)
     {
-        uint8_t who = IMU_WhoAmI();
+        // uint8_t who = IMU_WhoAmI();
 
-        double x_accel = IMU_Read_Accel(IMU_AXIS_X);
-        double y_accel = IMU_Read_Accel(IMU_AXIS_Y);
-        double z_accel = IMU_Read_Accel(IMU_AXIS_Z);
-        double x_rate = IMU_Read_Gyro(IMU_AXIS_X);
-        double y_rate = IMU_Read_Gyro(IMU_AXIS_Y);
-        double z_rate = IMU_Read_Gyro(IMU_AXIS_Z);
-        double temp = IMU_Read_Temp();
-
-        char print[128];
-        sprintf(print,
-                "who: %d | temp (C): %9.3f\naccel (g): %9.3f%9.3f%9.3f\nangvel (deg/s): %9.3f%9.3f%9.3f\n\n",
-                who, temp, x_accel, y_accel, z_accel, x_rate, y_rate, z_rate);
-        HAL_UART_Transmit(&huart2, (uint8_t *) print, strlen(print), HAL_MAX_DELAY);
+        // double x_accel = IMU_Read_Accel(IMU_AXIS_X);
+        // double y_accel = IMU_Read_Accel(IMU_AXIS_Y);
+        // double z_accel = IMU_Read_Accel(IMU_AXIS_Z);
+        // double x_rate = IMU_Read_Gyro(IMU_AXIS_X);
+        // double y_rate = IMU_Read_Gyro(IMU_AXIS_Y);
+        // double z_rate = IMU_Read_Gyro(IMU_AXIS_Z);
+        // double temp = IMU_Read_Temp();
 
         osDelay(5000);
     }
@@ -670,14 +672,32 @@ void StartDefaultTask(void *argument)
 /* USER CODE END Header_StartUpdateServos */
 void StartUpdateServos(void *argument)
 {
-  /* USER CODE BEGIN StartUpdateServos */
-  /* Infinite loop */
-  for(;;)
-  {
-    set_pwms(arm_pwms);
-    osDelay(50);
-  }
-  /* USER CODE END StartUpdateServos */
+    /* USER CODE BEGIN StartUpdateServos */
+    const double update_rate = 1; // ms
+
+    /* Infinite loop */
+    for(;;)
+    {
+        for (uint8_t i = 0; i < 7; i++)
+        {
+            arm_angles[i] += arm_speeds[i] * update_rate;
+            if (arm_speeds[i] > 0.0 && arm_angles[i] > arm_targets[i])
+            {
+                arm_angles[i] = arm_targets[i];
+                arm_speeds[i] = 0.0;
+            }
+            else if (arm_speeds[i] < 0.0 && arm_angles[i] < arm_targets[i])
+            {
+                arm_angles[i] = arm_targets[i];
+                arm_speeds[i] = 0.0;
+
+            }
+        }
+        set_angles(arm_angles, arm_pwms);
+        set_pwms(arm_pwms);
+        osDelay(update_rate);
+    }
+    /* USER CODE END StartUpdateServos */
 }
 
 /* USER CODE BEGIN Header_StartReceiveUART */
@@ -690,24 +710,34 @@ void StartUpdateServos(void *argument)
 void StartReceiveUART(void *argument)
 {
   /* USER CODE BEGIN StartReceiveUART */
+    HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
+    
     /* Infinite loop */
     for (;;)
     {
+        // Wait for the UART interrupt to notify this task
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n", command[0]);
+        HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_PRINT_DELAY);
 
         switch (command[0]) {
             case CMD_SET_ANGLE:
                 for (uint8_t i = 0; i < 7; i++)
                 {
                     uint8_t offset = 8 + i * 8;
-                    arm_angles[i] = *((double *)&command[offset]);
+                    double angle = *((double *)&command[offset]);
+                    arm_targets[i] = angle;
+                    arm_speeds[i] = (arm_targets[i] - arm_angles[i]) / tx_rate;
+
+                    // limit arm speed (especially for arm up/down switching movements)
+                    arm_speeds[i] = (arm_speeds[i] > max_speed_abs) ? max_speed_abs : arm_speeds[i];
+                    arm_speeds[i] = (arm_speeds[i] < -max_speed_abs) ? -max_speed_abs : arm_speeds[i];
                 }
 
-                set_angles(arm_angles, arm_pwms);
-
-                print_len = snprintf(print_buf, PRINT_BUF_SIZE, "cmd: %d\nnew servo angles: %f %f %f %f %f %f %f\n", command[0],
-                                    arm_angles[0], arm_angles[1], arm_angles[2], arm_angles[3], arm_angles[4], arm_angles[5], arm_angles[6]);
-                HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, HAL_MAX_DELAY);
+                // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "cmd: %d\nnew servo angles: %f %f %f %f %f %f %f\n", command[0],
+                //                     arm_angles[0], arm_angles[1], arm_angles[2], arm_angles[3], arm_angles[4], arm_angles[5], arm_angles[6]);
+                // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_PRINT_DELAY);
                 break;
             case CMD_SET_PWM:
                 for (uint8_t i = 0; i < 7; i++)
@@ -716,13 +746,20 @@ void StartReceiveUART(void *argument)
                     arm_pwms[i] = *((uint32_t *)&command[offset]);
                 }
 
-                uint16_t print_len = snprintf(print_buf, PRINT_BUF_SIZE, "cmd: %d\nnew servo pwms: %lu %lu %lu %lu %lu %lu %lu\n", command[0],
-                                    arm_pwms[0], arm_pwms[1], arm_pwms[2], arm_pwms[3], 
-                                    arm_pwms[4], arm_pwms[5], arm_pwms[6]);
-                HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, HAL_MAX_DELAY);
+                // uint16_t print_len = snprintf(print_buf, PRINT_BUF_SIZE, "cmd: %d\nnew servo pwms: %lu %lu %lu %lu %lu %lu %lu\n", command[0],
+                //                     arm_pwms[0], arm_pwms[1], arm_pwms[2], arm_pwms[3], 
+                //                     arm_pwms[4], arm_pwms[5], arm_pwms[6]);
+                // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_PRINT_DELAY);
             default:
                 break;
         }
+
+        // Wait for the UART reception to complete before starting a new reception
+        while (!uart_rx_complete)
+        {
+            taskYIELD();
+        }
+        uart_rx_complete = 0;
 
         HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
     }
