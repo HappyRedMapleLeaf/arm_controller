@@ -121,8 +121,8 @@ static void MX_I2C3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM2_Init(void);
 void StartDefaultTask(void *argument);
-void StartUpdateServos(void *argument);
-void StartReceiveUART(void *argument);
+void StartHighFreq(void *argument);
+void StartHandleUART(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -227,6 +227,9 @@ int main(void)
     HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
     HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
 
+	__HAL_RCC_TIM2_CLK_ENABLE();
+	TIM2->CR1 = TIM_CR1_CEN;
+
     IMU_Init();
 
     HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 1\n", 15, UART_PRINT_DELAY);
@@ -261,10 +264,10 @@ int main(void)
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of highFreq */
-  highFreqHandle = osThreadNew(StartUpdateServos, NULL, &highFreq_attributes);
+  highFreqHandle = osThreadNew(StartHighFreq, NULL, &highFreq_attributes);
 
   /* creation of handleUART */
-  handleUARTHandle = osThreadNew(StartReceiveUART, NULL, &handleUART_attributes);
+  handleUARTHandle = osThreadNew(StartHandleUART, NULL, &handleUART_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
@@ -705,8 +708,8 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	__HAL_RCC_TIM2_CLK_ENABLE();
-	TIM2->CR1 = TIM_CR1_CEN;
+	uint32_t prev_tim = TIM2->CNT;
+
     /* Infinite loop */
     for (;;)
     {
@@ -717,33 +720,14 @@ void StartDefaultTask(void *argument)
 //        double y_rate = IMU_Read_Gyro(IMU_AXIS_Y);
 //        double z_rate = IMU_Read_Gyro(IMU_AXIS_Z);
 
-        uint32_t tim = TIM2->CNT;
-        uint16_t print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%lu\n", tim);
-        HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_PRINT_DELAY);
-
-        osDelay(10);
-    }
-  /* USER CODE END 5 */
-}
-
-/* USER CODE BEGIN Header_StartUpdateServos */
-/**
- * @brief Function implementing the UpdateServos thread.
- * @param argument: Not used
- * @retval None
- */
-/* USER CODE END Header_StartUpdateServos */
-void StartUpdateServos(void *argument)
-{
-  /* USER CODE BEGIN StartUpdateServos */
-    const double update_rate = 1; // ms
-
-    /* Infinite loop */
-    for (;;)
-    {
         for (uint8_t i = 0; i < 7; i++)
         {
-            arm_angles[i] += arm_speeds[i] * update_rate;
+        	double elapsed_ms = TIM2->CNT - prev_tim;
+        	if (elapsed_ms < 0) {
+        		elapsed_ms += 1000000000.0;
+        	}
+        	prev_tim = TIM2->CNT;
+            arm_angles[i] += arm_speeds[i] * elapsed_ms;
             if (arm_speeds[i] > 0.0 && arm_angles[i] > arm_targets[i])
             {
                 arm_angles[i] = arm_targets[i];
@@ -757,21 +741,39 @@ void StartUpdateServos(void *argument)
         }
         set_angles(arm_angles, arm_pwms);
         set_pwms(arm_pwms);
-        osDelay(update_rate);
     }
-  /* USER CODE END StartUpdateServos */
+  /* USER CODE END 5 */
 }
 
-/* USER CODE BEGIN Header_StartReceiveUART */
+/* USER CODE BEGIN Header_StartHighFreq */
+/**
+ * @brief Function implementing the UpdateServos thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartHighFreq */
+void StartHighFreq(void *argument)
+{
+  /* USER CODE BEGIN StartHighFreq */
+
+    /* Infinite loop */
+    for (;;)
+    {
+        osDelay(10000);
+    }
+  /* USER CODE END StartHighFreq */
+}
+
+/* USER CODE BEGIN Header_StartHandleUART */
 /**
  * @brief Function implementing the ReceiveUART thread.
  * @param argument: Not used
  * @retval None
  */
-/* USER CODE END Header_StartReceiveUART */
-void StartReceiveUART(void *argument)
+/* USER CODE END Header_StartHandleUART */
+void StartHandleUART(void *argument)
 {
-  /* USER CODE BEGIN StartReceiveUART */
+  /* USER CODE BEGIN StartHandleUART */
     HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
 
     /* Infinite loop */
@@ -817,7 +819,7 @@ void StartReceiveUART(void *argument)
 
         HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
     }
-  /* USER CODE END StartReceiveUART */
+  /* USER CODE END StartHandleUART */
 }
 
 /**
