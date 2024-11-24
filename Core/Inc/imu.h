@@ -1,6 +1,8 @@
 #ifndef INC_IMU_H_
 #define INC_IMU_H_
 
+#include "math_utils.h"
+
 #include <stdint.h>
 #include <stdbool.h>
 #include "stm32f4xx_hal.h"
@@ -8,6 +10,8 @@
 #define IMU_AXIS_X 0
 #define IMU_AXIS_Y 1
 #define IMU_AXIS_Z 2
+
+#define MM_S_2_TO_G 9806.65
 
 void IMU_Init();
 
@@ -37,5 +41,11 @@ void IMU_Set_Accel_Range(uint8_t accel_fs_new);
 // 10 = +/- 2000 dps
 // 11 = +/- 4000 dps
 void IMU_Set_Gyro_Range(uint8_t gyro_fs_new);
+
+// units: mm/s^2
+Vec3 IMU_Read_Accel_Vec3();
+
+// units: rad/s
+Vec3 IMU_Read_Gyro_Vec3();
 
 #endif /* INC_IMU_H_ */

@@ -1,10 +1,5 @@
-struct Vec3 {
-    double x;
-    double y;
-    double z;
-};
+#include "math_utils.h"
 
-struct Mat3 {
-    double data[3][3];
-};
-
+double dot(Vec3 a, Vec3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}

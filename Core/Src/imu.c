@@ -1,4 +1,5 @@
 #include "imu.h"
+#include <math.h>
 
 #define TIMEOUT_MS                      1
 #define I2C_ADDRESS                     0x68
@@ -181,4 +182,51 @@ void IMU_Reset() {
     IMU_Change_User_Bank(0);
     I2C_Write_Byte(USER_CTRL, 0b00000100);  // reset SRAM
     I2C_Write_Byte(PWR_MGMT_1, 0b10000001); // reset all registers
+}
+
+Vec3 IMU_Read_Accel_Vec3() {
+    IMU_Change_User_Bank(0);
+
+    uint8_t data[6];
+    I2C_Read_Bytes(ACCEL_X_MSB_REGISTER, data, 6);
+
+    int16_t x = (data[0] << 8) | data[1];
+    int16_t y = (data[2] << 8) | data[3];
+    int16_t z = (data[4] << 8) | data[5];
+
+    double factor = (1 << accel_fs) / 8192.0 * MM_S_2_TO_G;
+
+    return (Vec3) {
+        x * factor,
+        y * factor,
+        z * factor
+    };
+}
+
+Vec3 IMU_Read_Gyro_Vec3() {
+    IMU_Change_User_Bank(0);
+
+    uint8_t data[6];
+    I2C_Read_Bytes(GYRO_X_MSB_REGISTER, data, 6);
+
+    int16_t x = (data[0] << 8) | data[1];
+    int16_t y = (data[2] << 8) | data[3];
+    int16_t z = (data[4] << 8) | data[5];
+
+    double gyro_sensitivity = 65.5;
+    if (gyro_fs == 1) {
+        gyro_sensitivity = 32.8;
+    } else if (gyro_fs == 2) {
+        gyro_sensitivity = 16.4;
+    } else if (gyro_fs == 3) {
+        gyro_sensitivity = 8.2;
+    }
+    
+    double factor = M_PI / gyro_sensitivity / 180;
+
+    return (Vec3) {
+        x * factor,
+        y * factor,
+        z * factor
+    };
 }
