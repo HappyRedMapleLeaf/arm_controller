@@ -11,7 +11,7 @@
 #define IMU_AXIS_Y 1
 #define IMU_AXIS_Z 2
 
-#define MM_S_2_TO_G 9806.65
+#define G_TO_MM_S_2 9806.65
 
 void IMU_Init();
 

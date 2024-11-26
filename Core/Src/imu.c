@@ -194,7 +194,7 @@ Vec3 IMU_Read_Accel_Vec3() {
     int16_t y = (data[2] << 8) | data[3];
     int16_t z = (data[4] << 8) | data[5];
 
-    double factor = (1 << accel_fs) / 8192.0 * MM_S_2_TO_G;
+    double factor = (1 << accel_fs) / 8192.0 * G_TO_MM_S_2;
 
     return (Vec3) {
         x * factor,
