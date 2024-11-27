@@ -69,7 +69,7 @@ void IMU_Change_User_Bank(uint8_t bank) {
     if (bank > 3) {
         return;
     }
-    I2C_Write_Byte(REG_BANK_SEL, bank);
+    I2C_Write_Byte(REG_BANK_SEL, bank << 4);
     user_bank = bank;
 }
 
@@ -176,6 +176,8 @@ void IMU_Init() {
     // which is the 2nd byte so it becomes 0x01
     I2C_Write_Byte(PWR_MGMT_1, 0x01);
     HAL_Delay(40);
+    // IMU_Set_Accel_Range(0b01);
+    // IMU_Set_Gyro_Range(0b10);
 }
 
 void IMU_Reset() {
@@ -222,7 +224,7 @@ Vec3 IMU_Read_Gyro_Vec3() {
         gyro_sensitivity = 8.2;
     }
     
-    double factor = M_PI / gyro_sensitivity / 180;
+    double factor = (M_PI / gyro_sensitivity) / 180;
 
     return (Vec3) {
         x * factor,

@@ -28,5 +28,6 @@ Vec3 vec3_cross(Vec3 a, Vec3 b);
 Mat3 mat3_mul(Mat3 a, Mat3 b);
 Mat3 mat3_add(Mat3 a, Mat3 b);
 Mat3 mat3_scale(Mat3 a, double s);
+Mat3 mat3_transpose(Mat3 a);
 
 #endif // MATH_UTILS_H

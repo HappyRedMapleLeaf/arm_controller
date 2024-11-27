@@ -39,7 +39,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define UART_TX_DELAY 10
+#define UART_TX_DELAY 50
 
 #define CMD_LEN 64
 
@@ -66,7 +66,7 @@
 // 0x20 - unused
 #define CMD_SET_PWM 0x02
 
-#define PRINT_BUF_SIZE 256
+#define PRINT_BUF_SIZE 512
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -660,116 +660,96 @@ static void MX_GPIO_Init(void) {
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument) {
     /* USER CODE BEGIN 5 */
-    for(;;) {
-        uint8_t who = IMU_WhoAmI();
-
-        double x_accel = IMU_Read_Accel(IMU_AXIS_X);
-        double y_accel = IMU_Read_Accel(IMU_AXIS_Y);
-        double z_accel = IMU_Read_Accel(IMU_AXIS_Z);
-        double x_rate = IMU_Read_Gyro(IMU_AXIS_X);
-        double y_rate = IMU_Read_Gyro(IMU_AXIS_Y);
-        double z_rate = IMU_Read_Gyro(IMU_AXIS_Z);
-        double temp = IMU_Read_Temp();
-
-        char print[128];
-        sprintf(print,
-                "who: %d | temp (C): %9.3f\naccel (g): %9.3f%9.3f%9.3f\nangvel (deg/s): %9.3f%9.3f%9.3f\n\n",
-                who, temp, x_accel, y_accel, z_accel, x_rate, y_rate, z_rate);
-        HAL_UART_Transmit(&huart2, (uint8_t *) print, strlen(print), HAL_MAX_DELAY);
-
-        osDelay(1000);
-    }
-    // uint32_t prev_tim = TIM2->CNT; // microseconds
+    int64_t prev_us = TIM2->CNT; // microseconds
     
-    // Vec3 average_accel = IMU_Read_Accel_Vec3();
-    // uint32_t init_cycle = 1;
+    Vec3 average_accel = IMU_Read_Accel_Vec3();
+    uint32_t init_cycle = 1;
 
-    // // todo: calibration first second
-    // while (TIM2->CNT - prev_tim < 1000000) {
-    //     // init_cycle++;
-    //     // Vec3 accel = IMU_Read_Accel_Vec3();
-    //     // average_accel = vec3_add(average_accel, accel);
-    //     // average_accel = vec3_scale(average_accel, 1 / init_cycle);
-    //     // osDelay(2);
-    // }
+    // todo: calibration first second
+    while (TIM2->CNT - prev_us < 1000000) {
+        init_cycle++;
+        Vec3 accel = IMU_Read_Accel_Vec3();
+        average_accel = vec3_add(average_accel, accel);
+        osDelay(50);
+    }
+    average_accel = vec3_scale(average_accel, 1.0 / init_cycle);
 
-    // Vec3 new_z = vec3_neg(vec3_norm(average_accel));
-    // Vec3 new_x = vec3_norm(vec3_sub(imu_dir.col1, vec3_scale(new_z, dot(new_z, imu_dir.col1))));
-    // Vec3 new_y = vec3_cross(new_z, new_x);
+    // when stationary, there is a 1g acceleration directly upwards
+    // here we calculate the world frame relative to the imu, then invert (transpose) to get the
+    // imu frame relative to the world
+    Vec3 new_z = vec3_norm(average_accel);
+    Vec3 new_x = vec3_norm(vec3_sub(imu_dir.col1, vec3_scale(new_z, dot(new_z, imu_dir.col1))));
+    Vec3 new_y = vec3_cross(new_z, new_x);
 
-    // imu_dir = (Mat3){new_x, new_y, new_z};
+    imu_dir = (Mat3){new_x, new_y, new_z};
+    imu_dir = mat3_transpose(imu_dir);
 
-    // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%f %f %f\n", 
-    //     // average_accel.x, average_accel.y, average_accel.z
-    //     IMU_Read_Accel(IMU_AXIS_X), IMU_Read_Accel(IMU_AXIS_Y), IMU_Read_Accel(IMU_AXIS_Z)
-    // );
-    // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_TX_DELAY);
+    /* Infinite loop */
+    for (;;) {
+        int64_t elapsed_us = TIM2->CNT - prev_us;
+        // handle timer value wraparound (once per 1000 seconds)
+        if (elapsed_us < 0) {
+            elapsed_us += 1000000000;
+        }
+        double elapsed_s = elapsed_us / 1000000.0;
+        prev_us = TIM2->CNT;
 
-    // // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%f %f %f\n%f %f %f\n%f %f %f\n%f %f %f\n", 
-    // //     imu_pos.x, imu_pos.y, imu_pos.z, 
-    // //     imu_dir.col1.x, imu_dir.col1.y, imu_dir.col1.z,
-    // //     imu_dir.col2.x, imu_dir.col2.y, imu_dir.col2.z,
-    // //     imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z
-    // // );
-    // // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_TX_DELAY);
+        // // we can do imu reads once every 2ms without a problem
+        // Vec3 accel = IMU_Read_Accel_Vec3();
 
-    // /* Infinite loop */
-    // for (;;) {
-    //     double elapsed_ms = TIM2->CNT - prev_tim;
-    //     if (elapsed_ms < 0) {
-    //         elapsed_ms += 1000000000.0;
-    //     }
-
-    //     // we can do imu reads once every 2ms without a problem
-    //     Vec3 accel = IMU_Read_Accel_Vec3();
-
-    //     // todo: remove acceleration due to gravity
+        // // remove acceleration due to gravity
+        // // 3rd row of imu_dir is the z axis of the world frame relative to the imu
+        // accel = vec3_sub(accel, vec3_scale((Vec3) {imu_dir.col1.z, imu_dir.col2.z, imu_dir.col3.z}, G_TO_MM_S_2));
         
-    //     imu_vel.x += dot(accel, imu_dir.col1) * elapsed_ms;
-    //     imu_vel.y += dot(accel, imu_dir.col2) * elapsed_ms;
-    //     imu_vel.z += dot(accel, imu_dir.col3) * elapsed_ms;
-    //     imu_pos.x += imu_vel.x * elapsed_ms;
-    //     imu_pos.y += imu_vel.y * elapsed_ms;
-    //     imu_pos.z += imu_vel.z * elapsed_ms;
+        // imu_vel.x += dot(accel, imu_dir.col1) * elapsed_s;
+        // imu_vel.y += dot(accel, imu_dir.col2) * elapsed_s;
+        // imu_vel.z += dot(accel, imu_dir.col3) * elapsed_s;
+        // imu_pos.x += imu_vel.x * elapsed_s;
+        // imu_pos.y += imu_vel.y * elapsed_s;
+        // imu_pos.z += imu_vel.z * elapsed_s;
 
-    //     Vec3 rate = IMU_Read_Gyro_Vec3();
+        // Vec3 rate = IMU_Read_Gyro_Vec3();
+        Vec3 rate = IMU_Read_Gyro_Vec3();
 
-    //     double rate_mag = sqrt(rate.x * rate.x + rate.y * rate.y + rate.z * rate.z);
-    //     Vec3 rate_norm = {rate.x / rate_mag, rate.y / rate_mag, rate.z / rate_mag};
+        double rate_mag = vec3_mag(rate);
+        Vec3 rate_norm = vec3_norm(rate);
 
-    //     Mat3 rate_mat = {{0, -rate_norm.z, rate_norm.y},
-    //                      {rate_norm.z, 0, -rate_norm.x},
-    //                      {-rate_norm.y, rate_norm.x, 0}};
-    //     Mat3 identity_mat = {{1, 0, 0},
-    //                          {0, 1, 0},
-    //                          {0, 0, 1}};
+        Mat3 rate_mat = {{0, -rate_norm.z, rate_norm.y},
+                         {rate_norm.z, 0, -rate_norm.x},
+                         {-rate_norm.y, rate_norm.x, 0}};
+        Mat3 identity_mat = {{1, 0, 0},
+                             {0, 1, 0},
+                             {0, 0, 1}};
 
-    //     double angle = rate_mag * elapsed_ms;
+        double angle = rate_mag * elapsed_s;
+        // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%.3f\n", angle);
+        // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 1);
 
-    //     // Rodrigues' rotation formula
-    //     // Is the relativity correct? The rotation should be relative to the current orientation, not the world frame
-    //     // I think it's correct though
-    //     Mat3 rot_mat = mat3_add(identity_mat, mat3_add(mat3_scale(rate_mat, sin(angle)), mat3_scale(mat3_mul(rate_mat, rate_mat), 1 - cos(angle))));
+        // Rodrigues' rotation formula
+        // Is the relativity correct? The rotation should be relative to the current orientation, not the world frame
+        // I think it's correct though
+        Mat3 rot_mat = mat3_add(identity_mat, mat3_add(mat3_scale(rate_mat, sin(angle)), mat3_scale(mat3_mul(rate_mat, rate_mat), 1 - cos(angle))));
 
-    //     imu_dir = mat3_mul(imu_dir, rot_mat);
+        imu_dir = mat3_mul(imu_dir, rot_mat);
 
-    //     for (uint8_t i = 0; i < 7; i++) {
-    //         prev_tim = TIM2->CNT;
-    //         arm_angles[i] += arm_speeds[i] * elapsed_ms;
-    //         if (arm_speeds[i] > 0.0 && arm_angles[i] > arm_targets[i]) {
-    //             arm_angles[i] = arm_targets[i];
-    //             arm_speeds[i] = 0.0;
-    //         }
-    //         else if (arm_speeds[i] < 0.0 && arm_angles[i] < arm_targets[i]) {
-    //             arm_angles[i] = arm_targets[i];
-    //             arm_speeds[i] = 0.0;
-    //         }
-    //     }
-    //     set_angles(arm_angles, arm_pwms);
-    //     set_pwms(arm_pwms);
+        // // SERVO SETTING
+        // for (uint8_t i = 0; i < 7; i++) {
+        //     prev_us = TIM2->CNT;
+        //     arm_angles[i] += arm_speeds[i] * elapsed_ms;
+        //     if (arm_speeds[i] > 0.0 && arm_angles[i] > arm_targets[i]) {
+        //         arm_angles[i] = arm_targets[i];
+        //         arm_speeds[i] = 0.0;
+        //     }
+        //     else if (arm_speeds[i] < 0.0 && arm_angles[i] < arm_targets[i]) {
+        //         arm_angles[i] = arm_targets[i];
+        //         arm_speeds[i] = 0.0;
+        //     }
+        // }
+        // set_angles(arm_angles, arm_pwms);
+        // set_pwms(arm_pwms);
 
-    //     osDelay(1);
-    // }
+        osDelay(50);
+    }
     /* USER CODE END 5 */
 }
 
@@ -782,7 +762,7 @@ void StartDefaultTask(void *argument) {
 /* USER CODE END Header_StartHighFreq */
 void StartHighFreq(void *argument) {
     /* USER CODE BEGIN StartHighFreq */
-
+    osDelay(2000);
     /* Infinite loop */
     for (;;)
     {
@@ -806,7 +786,15 @@ void StartHighFreq(void *argument) {
         //     imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z
         // );
         // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_TX_DELAY);
-        osDelay(10000);
+        uint8_t who = IMU_WhoAmI();
+        print_len = snprintf(print_buf, PRINT_BUF_SIZE, "who: %d pos:\n%.2f %.2f %.2f\ndir:\n%.6f %.6f %.6f\n%.6f %.6f %.6f\n%.6f %.6f %.6f\n", 
+            who, imu_pos.x, imu_pos.y, imu_pos.z, 
+            imu_dir.col1.x, imu_dir.col2.x, imu_dir.col3.x,
+            imu_dir.col1.y, imu_dir.col2.y, imu_dir.col3.y,
+            imu_dir.col1.z, imu_dir.col2.z, imu_dir.col3.z
+        );
+        HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_TX_DELAY);
+        osDelay(1000);
     }
     /* USER CODE END StartHighFreq */
 }

@@ -68,3 +68,10 @@ Mat3 mat3_scale(Mat3 a, double s) {
     Vec3 col3 = {a.col3.x * s, a.col3.y * s, a.col3.z * s};
     return (Mat3){col1, col2, col3};
 }
+
+Mat3 mat3_transpose(Mat3 a) {
+    Vec3 col1 = {a.col1.x, a.col2.x, a.col3.x};
+    Vec3 col2 = {a.col1.y, a.col2.y, a.col3.y};
+    Vec3 col3 = {a.col1.z, a.col2.z, a.col3.z};
+    return (Mat3){col1, col2, col3};
+}
