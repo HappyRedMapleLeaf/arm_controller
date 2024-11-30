@@ -66,7 +66,7 @@
 // 0x20 - unused
 #define CMD_SET_PWM 0x02
 
-#define PRINT_BUF_SIZE 512
+#define PRINT_BUF_SIZE 128
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -596,7 +596,7 @@ static void MX_USART2_UART_Init(void) {
 
     /* USER CODE END USART2_Init 1 */
     huart2.Instance = USART2;
-    huart2.Init.BaudRate = 115200;
+    huart2.Init.BaudRate = 230400;
     huart2.Init.WordLength = UART_WORDLENGTH_8B;
     huart2.Init.StopBits = UART_STOPBITS_1;
     huart2.Init.Parity = UART_PARITY_NONE;
@@ -661,18 +661,24 @@ static void MX_GPIO_Init(void) {
 void StartDefaultTask(void *argument) {
     /* USER CODE BEGIN 5 */
     int64_t prev_us = TIM2->CNT; // microseconds
+    int64_t prev_us_print = TIM2->CNT; // microseconds
     
     Vec3 average_accel = IMU_Read_Accel_Vec3();
+    Vec3 rate_drift = IMU_Read_Gyro_Vec3();
     uint32_t init_cycle = 1;
+
 
     // todo: calibration first second
     while (TIM2->CNT - prev_us < 1000000) {
         init_cycle++;
         Vec3 accel = IMU_Read_Accel_Vec3();
         average_accel = vec3_add(average_accel, accel);
-        osDelay(50);
+        Vec3 rate = IMU_Read_Gyro_Vec3();
+        rate_drift = vec3_add(rate_drift, rate);
+        osDelay(10);
     }
     average_accel = vec3_scale(average_accel, 1.0 / init_cycle);
+    rate_drift = vec3_scale(rate_drift, 1.0 / init_cycle);
 
     // when stationary, there is a 1g acceleration directly upwards
     // here we calculate the world frame relative to the imu, then invert (transpose) to get the
@@ -709,7 +715,7 @@ void StartDefaultTask(void *argument) {
         // imu_pos.z += imu_vel.z * elapsed_s;
 
         // Vec3 rate = IMU_Read_Gyro_Vec3();
-        Vec3 rate = IMU_Read_Gyro_Vec3();
+        Vec3 rate = vec3_sub(IMU_Read_Gyro_Vec3(), rate_drift);
 
         double rate_mag = vec3_mag(rate);
         Vec3 rate_norm = vec3_norm(rate);
@@ -748,7 +754,14 @@ void StartDefaultTask(void *argument) {
         // set_angles(arm_angles, arm_pwms);
         // set_pwms(arm_pwms);
 
-        osDelay(50);
+        if (TIM2->CNT - prev_us_print > 2 * 1000000) {
+            uint8_t who = IMU_WhoAmI();
+            print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n%6.4f %6.4f %6.4f\n", 
+                who, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z);
+            HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 2);
+            prev_us_print = TIM2->CNT;
+        }
+        osDelay(1);
     }
     /* USER CODE END 5 */
 }
@@ -786,14 +799,16 @@ void StartHighFreq(void *argument) {
         //     imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z
         // );
         // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_TX_DELAY);
-        uint8_t who = IMU_WhoAmI();
-        print_len = snprintf(print_buf, PRINT_BUF_SIZE, "who: %d pos:\n%.2f %.2f %.2f\ndir:\n%.6f %.6f %.6f\n%.6f %.6f %.6f\n%.6f %.6f %.6f\n", 
-            who, imu_pos.x, imu_pos.y, imu_pos.z, 
-            imu_dir.col1.x, imu_dir.col2.x, imu_dir.col3.x,
-            imu_dir.col1.y, imu_dir.col2.y, imu_dir.col3.y,
-            imu_dir.col1.z, imu_dir.col2.z, imu_dir.col3.z
-        );
-        HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, UART_TX_DELAY);
+        // uint8_t who = IMU_WhoAmI();
+        // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "who: %d pos:\n%.2f %.2f %.2f\ndir:\n%.6f %.6f %.6f\n%.6f %.6f %.6f\n%.6f %.6f %.6f\n", 
+        //     who, imu_pos.x, imu_pos.y, imu_pos.z, 
+        //     imu_dir.col1.x, imu_dir.col2.x, imu_dir.col3.x,
+        //     imu_dir.col1.y, imu_dir.col2.y, imu_dir.col3.y,
+        //     imu_dir.col1.z, imu_dir.col2.z, imu_dir.col3.z
+        // );
+        // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n%9.6f %9.6f %9.6f\n", 
+        //     who, imu_dir.col1.x, imu_dir.col1.y, imu_dir.col1.z);
+        // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 5);
         osDelay(1000);
     }
     /* USER CODE END StartHighFreq */
