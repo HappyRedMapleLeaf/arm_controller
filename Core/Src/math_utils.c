@@ -75,3 +75,35 @@ Mat3 mat3_transpose(Mat3 a) {
     Vec3 col3 = {a.col1.z, a.col2.z, a.col3.z};
     return (Mat3){col1, col2, col3};
 }
+
+QuatF quatf_scale(QuatF q, float a) {
+    return (QuatF){q.x * a, q.y * a, q.z * a, q.w * a};
+}
+
+QuatF quatf_from_mat3(Mat3 a) {
+    // https://d3cw3dd2w32x2b.cloudfront.net/wp-content/uploads/2015/01/matrix-to-quat.pdf
+    float t;
+    QuatF q;
+
+    if (a.col2.y < 0) {
+        if (a.col1.x > a.col2.y) {
+            t = 1 + a.col1.x - a.col2.y - a.col3.z;
+            q = (QuatF) { t, a.col2.x+a.col1.y, a.col1.z+a.col3.x, a.col3.y-a.col2.z };
+        } else {
+            t = 1 - a.col1.x + a.col2.y - a.col3.z;
+            q = (QuatF) { a.col2.x+a.col1.y, t, a.col3.y+a.col2.z, a.col1.z-a.col3.x };
+        }
+    } else {
+        if (a.col1.x < -a.col2.y) {
+            t = 1 - a.col1.x - a.col2.y + a.col3.z;
+            q = (QuatF) { a.col1.z+a.col3.x, a.col3.y+a.col2.z, t, a.col2.x-a.col1.y };
+        }
+        else {
+            t = 1 + a.col1.x + a.col2.y + a.col3.z;
+            q = (QuatF) { a.col3.y-a.col2.z, a.col1.z-a.col3.x, a.col2.x-a.col1.y, t };
+        }
+    }
+    q = quatf_scale(q, 0.5 / sqrt(t));
+
+    return q;
+}

@@ -8,6 +8,13 @@ typedef struct {
 } Vec3;
 
 typedef struct {
+    float x;
+    float y;
+    float z;
+    float w;
+} QuatF;
+
+typedef struct {
     Vec3 col1;
     Vec3 col2;
     Vec3 col3;
@@ -29,5 +36,8 @@ Mat3 mat3_mul(Mat3 a, Mat3 b);
 Mat3 mat3_add(Mat3 a, Mat3 b);
 Mat3 mat3_scale(Mat3 a, double s);
 Mat3 mat3_transpose(Mat3 a);
+
+QuatF quatf_from_mat3(Mat3 a);
+QuatF quatf_scale(QuatF q, float a);
 
 #endif // MATH_UTILS_H

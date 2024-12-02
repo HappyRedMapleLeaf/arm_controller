@@ -144,6 +144,8 @@ Vec3 imu_pos = {0, 0, 0};
 Vec3 imu_vel = {0, 0, 0};
 Mat3 imu_dir = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
 
+bool txReady = true;
+
 /*
 if range is pi, shift is pi/2, then -pi/2 maps to 500, pi/2 maps to 2500
 nudge is for small adjustments in case the servo is not centered
@@ -182,6 +184,21 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
         // Force a context switch if xHigherPriorityTaskWoken is now set to pdTRUE
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+	txReady = true;
+}
+
+int UART_Send(uint8_t *data, uint16_t size)
+{
+    if (txReady)
+    {
+        txReady = false;
+        return HAL_UART_Transmit_IT(&huart2, data, size);;
+    }
+    return -1;
 }
 /* USER CODE END 0 */
 
@@ -232,9 +249,11 @@ int main(void) {
 
     IMU_Init();
 
-    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 1\n", 15, UART_TX_DELAY);
-    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 2\n", 15, UART_TX_DELAY);
-    HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 3\n", 15, UART_TX_DELAY);
+    // HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 1\n", 15, UART_TX_DELAY);
+    // HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 2\n", 15, UART_TX_DELAY);
+    // HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 3\n", 15, UART_TX_DELAY);
+    uint8_t start_signal[4*8] = {0};
+    HAL_UART_Transmit(&huart2, start_signal, 32, UART_TX_DELAY);
 
     set_angles(arm_angles, arm_pwms);
     set_pwms(arm_pwms);
@@ -754,14 +773,21 @@ void StartDefaultTask(void *argument) {
         // set_angles(arm_angles, arm_pwms);
         // set_pwms(arm_pwms);
 
-        if (TIM2->CNT - prev_us_print > 2 * 1000000) {
+        if (TIM2->CNT - prev_us_print > 1 * 1000000) {
             uint8_t who = IMU_WhoAmI();
-            print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n%6.4f %6.4f %6.4f\n", 
-                who, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z);
-            HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 2);
+            // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n%6.4f %6.4f %6.4f\n", 
+            //     who, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z);
+            // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 2);
+
+            uint8_t send[4*8] = {0};
+            send[1] = who;
+            QuatF q = quatf_from_mat3(imu_dir);
+            float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
+            memcpy(&send[4], &data, 7*sizeof(float));
+            UART_Send(send, 32);
             prev_us_print = TIM2->CNT;
         }
-        osDelay(1);
+        // osDelay(1);
     }
     /* USER CODE END 5 */
 }
