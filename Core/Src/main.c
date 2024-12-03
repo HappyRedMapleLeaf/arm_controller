@@ -196,7 +196,7 @@ int UART_Send(uint8_t *data, uint16_t size)
     if (txReady)
     {
         txReady = false;
-        return HAL_UART_Transmit_IT(&huart2, data, size);;
+        return HAL_UART_Transmit_IT(&huart2, data, size);
     }
     return -1;
 }
@@ -254,6 +254,8 @@ int main(void) {
     // HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 3\n", 15, UART_TX_DELAY);
     uint8_t start_signal[4*8] = {0};
     HAL_UART_Transmit(&huart2, start_signal, 32, UART_TX_DELAY);
+    // HAL_UART_Transmit(&huart2, (uint8_t *)"asdfghjklqasdfghjklqasdfghjklqa\n", 32, UART_TX_DELAY);
+
 
     set_angles(arm_angles, arm_pwms);
     set_pwms(arm_pwms);
@@ -780,11 +782,13 @@ void StartDefaultTask(void *argument) {
             // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 2);
 
             uint8_t send[4*8] = {0};
+            send[0] = 0x1;
             send[1] = who;
             QuatF q = quatf_from_mat3(imu_dir);
             float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
-            memcpy(&send[4], &data, 7*sizeof(float));
+            memcpy(&send[4], &data, 4*7);
             UART_Send(send, 32);
+            // UART_Send((uint8_t *)"AAAfghjklqasdfghjklqasdfghjkAAA\n", 32);
             prev_us_print = TIM2->CNT;
         }
         // osDelay(1);
