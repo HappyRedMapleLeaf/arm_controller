@@ -775,7 +775,7 @@ void StartDefaultTask(void *argument) {
         // set_angles(arm_angles, arm_pwms);
         // set_pwms(arm_pwms);
 
-        if (TIM2->CNT - prev_us_print > 1 * 1000000) {
+        if (TIM2->CNT - prev_us_print > 250000) {
             uint8_t who = IMU_WhoAmI();
             // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n%6.4f %6.4f %6.4f\n", 
             //     who, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z);
