@@ -672,20 +672,20 @@ static void MX_GPIO_Init(void) {
 /* USER CODE BEGIN 4 */
 void DoCalibration() {
     int64_t prev_us = TIM2->CNT; // microseconds
-
+    uint32_t cal_cycle = 1;
     Vec3 average_accel = IMU_Read_Accel_Vec3();
     rate_drift = IMU_Read_Gyro_Vec3();
-    uint32_t calibration_cycle = 1;
-    while (TIM2->CNT - prev_us < 500000) {
-        calibration_cycle++;
+
+    // calibration
+    while (TIM2->CNT - prev_us < 100000) {
+        cal_cycle++;
         Vec3 accel = IMU_Read_Accel_Vec3();
         average_accel = vec3_add(average_accel, accel);
         Vec3 rate = IMU_Read_Gyro_Vec3();
         rate_drift = vec3_add(rate_drift, rate);
-        osDelay(10);
     }
-    average_accel = vec3_scale(average_accel, 1.0 / calibration_cycle);
-    rate_drift = vec3_scale(rate_drift, 1.0 / calibration_cycle);
+    average_accel = vec3_scale(average_accel, 1.0 / cal_cycle);
+    rate_drift = vec3_scale(rate_drift, 1.0 / cal_cycle);
 
     // when stationary, there is a 1g acceleration directly upwards
     // here we calculate the world frame relative to the imu, then invert (transpose) to get the
@@ -717,7 +717,7 @@ void StartDefaultTask(void *argument) {
 
     /* Infinite loop */
     for (;;) {
-        bool button_pressed = HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin);
+        bool button_pressed = HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_SET;
         if (button_pressed && !prev_button) {
             DoCalibration();
             prev_us = TIM2->CNT; // ignore time spent in calibration; assumed that calibration is done when stationary
