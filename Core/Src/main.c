@@ -143,6 +143,7 @@ const double max_speed_abs = M_PI_2 / 1000; // rad/ms
 Vec3 imu_pos = {0, 0, 0};
 Vec3 imu_vel = {0, 0, 0};
 Mat3 imu_dir = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+Vec3 rate_drift = {0, 0, 0};
 
 bool txReady = true;
 
@@ -669,7 +670,34 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
+void DoCalibration() {
+    int64_t prev_us = TIM2->CNT; // microseconds
 
+    Vec3 average_accel = IMU_Read_Accel_Vec3();
+    rate_drift = IMU_Read_Gyro_Vec3();
+    uint32_t calibration_cycle = 1;
+    while (TIM2->CNT - prev_us < 500000) {
+        calibration_cycle++;
+        Vec3 accel = IMU_Read_Accel_Vec3();
+        average_accel = vec3_add(average_accel, accel);
+        Vec3 rate = IMU_Read_Gyro_Vec3();
+        rate_drift = vec3_add(rate_drift, rate);
+        osDelay(10);
+    }
+    average_accel = vec3_scale(average_accel, 1.0 / calibration_cycle);
+    rate_drift = vec3_scale(rate_drift, 1.0 / calibration_cycle);
+
+    // when stationary, there is a 1g acceleration directly upwards
+    // here we calculate the world frame relative to the imu, then invert (transpose) to get the
+    // imu frame relative to the world
+    Vec3 new_z = vec3_norm(average_accel);
+    Vec3 new_x = vec3_norm(vec3_sub(imu_dir.col1, vec3_scale(new_z, dot(new_z, imu_dir.col1))));
+    Vec3 new_y = vec3_cross(new_z, new_x);
+
+    imu_dir = (Mat3){new_x, new_y, new_z};
+    // for some reason uncommenting this fixes initial direction. idk
+    // imu_dir = mat3_transpose(imu_dir);
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -683,36 +711,19 @@ void StartDefaultTask(void *argument) {
     /* USER CODE BEGIN 5 */
     int64_t prev_us = TIM2->CNT; // microseconds
     int64_t prev_us_print = TIM2->CNT; // microseconds
-    
-    Vec3 average_accel = IMU_Read_Accel_Vec3();
-    Vec3 rate_drift = IMU_Read_Gyro_Vec3();
-    uint32_t init_cycle = 1;
+    bool prev_button = false;
 
-
-    // todo: calibration first second
-    while (TIM2->CNT - prev_us < 1000000) {
-        init_cycle++;
-        Vec3 accel = IMU_Read_Accel_Vec3();
-        average_accel = vec3_add(average_accel, accel);
-        Vec3 rate = IMU_Read_Gyro_Vec3();
-        rate_drift = vec3_add(rate_drift, rate);
-        osDelay(10);
-    }
-    average_accel = vec3_scale(average_accel, 1.0 / init_cycle);
-    rate_drift = vec3_scale(rate_drift, 1.0 / init_cycle);
-
-    // when stationary, there is a 1g acceleration directly upwards
-    // here we calculate the world frame relative to the imu, then invert (transpose) to get the
-    // imu frame relative to the world
-    Vec3 new_z = vec3_norm(average_accel);
-    Vec3 new_x = vec3_norm(vec3_sub(imu_dir.col1, vec3_scale(new_z, dot(new_z, imu_dir.col1))));
-    Vec3 new_y = vec3_cross(new_z, new_x);
-
-    imu_dir = (Mat3){new_x, new_y, new_z};
-    imu_dir = mat3_transpose(imu_dir);
+    DoCalibration();
 
     /* Infinite loop */
     for (;;) {
+        bool button_pressed = HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin);
+        if (button_pressed && !prev_button) {
+            DoCalibration();
+            prev_us = TIM2->CNT; // ignore time spent in calibration; assumed that calibration is done when stationary
+        }
+        prev_button = button_pressed;
+
         int64_t elapsed_us = TIM2->CNT - prev_us;
         // handle timer value wraparound (once per 1000 seconds)
         if (elapsed_us < 0) {
@@ -787,6 +798,7 @@ void StartDefaultTask(void *argument) {
             QuatF q = quatf_from_mat3(imu_dir);
             float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
             memcpy(&send[4], &data, 4*7);
+            memcpy(&send[4], &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
             UART_Send(send, 32);
             // UART_Send((uint8_t *)"AAAfghjklqasdfghjklqasdfghjkAAA\n", 32);
             prev_us_print = TIM2->CNT;
