@@ -55,6 +55,12 @@ Mat3 mat3_mul(Mat3 a, Mat3 b) {
     return (Mat3){col1, col2, col3};
 }
 
+Vec3 mat3_mul_vec3(Mat3 a, Vec3 b) {
+    return (Vec3){dot((Vec3) {a.col1.x, a.col2.x, a.col3.x}, b), 
+                  dot((Vec3) {a.col1.y, a.col2.y, a.col3.y}, b), 
+                  dot((Vec3) {a.col1.z, a.col2.z, a.col3.z}, b)};
+}
+
 Mat3 mat3_add(Mat3 a, Mat3 b) {
     Vec3 col1 = {a.col1.x + b.col1.x, a.col1.y + b.col1.y, a.col1.z + b.col1.z};
     Vec3 col2 = {a.col2.x + b.col2.x, a.col2.y + b.col2.y, a.col2.z + b.col2.z};

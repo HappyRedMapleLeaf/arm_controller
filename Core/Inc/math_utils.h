@@ -31,6 +31,7 @@ Vec3 vec3_proj_unit(Vec3 a, Vec3 b);
 Vec3 vec3_neg(Vec3 a);
 Vec3 vec3_sub(Vec3 a, Vec3 b);
 Vec3 vec3_cross(Vec3 a, Vec3 b);
+Vec3 mat3_mul_vec3(Mat3 a, Vec3 b);
 
 Mat3 mat3_mul(Mat3 a, Mat3 b);
 Mat3 mat3_add(Mat3 a, Mat3 b);

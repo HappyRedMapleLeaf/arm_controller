@@ -144,6 +144,7 @@ Vec3 imu_pos = {0, 0, 0};
 Vec3 imu_vel = {0, 0, 0};
 Mat3 imu_dir = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
 Vec3 rate_drift = {0, 0, 0};
+Vec3 accel_drift = {0, 0, 0};
 
 bool txReady = true;
 
@@ -671,32 +672,26 @@ static void MX_GPIO_Init(void) {
 
 /* USER CODE BEGIN 4 */
 void DoCalibration() {
+    imu_pos = (Vec3) {0, 0, 0};
+    imu_vel = (Vec3) {0, 0, 0};
+    imu_dir = (Mat3) {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+
     int64_t prev_us = TIM2->CNT; // microseconds
     uint32_t cal_cycle = 1;
-    Vec3 average_accel = IMU_Read_Accel_Vec3();
     rate_drift = IMU_Read_Gyro_Vec3();
+    accel_drift = IMU_Read_Accel_Vec3();
 
     // calibration
-    while (TIM2->CNT - prev_us < 100000) {
+    while (TIM2->CNT - prev_us < 500000) {
         cal_cycle++;
         Vec3 accel = IMU_Read_Accel_Vec3();
-        average_accel = vec3_add(average_accel, accel);
+        accel_drift = vec3_add(accel_drift, accel);
         Vec3 rate = IMU_Read_Gyro_Vec3();
         rate_drift = vec3_add(rate_drift, rate);
     }
-    average_accel = vec3_scale(average_accel, 1.0 / cal_cycle);
+    accel_drift = vec3_scale(accel_drift, 1.0 / cal_cycle);
+    accel_drift.z -= G_TO_MM_S_2;
     rate_drift = vec3_scale(rate_drift, 1.0 / cal_cycle);
-
-    // when stationary, there is a 1g acceleration directly upwards
-    // here we calculate the world frame relative to the imu, then invert (transpose) to get the
-    // imu frame relative to the world
-    Vec3 new_z = vec3_norm(average_accel);
-    Vec3 new_x = vec3_norm(vec3_sub(imu_dir.col1, vec3_scale(new_z, dot(new_z, imu_dir.col1))));
-    Vec3 new_y = vec3_cross(new_z, new_x);
-
-    imu_dir = (Mat3){new_x, new_y, new_z};
-    // for some reason uncommenting this fixes initial direction. idk
-    // imu_dir = mat3_transpose(imu_dir);
 }
 /* USER CODE END 4 */
 
@@ -732,19 +727,19 @@ void StartDefaultTask(void *argument) {
         double elapsed_s = elapsed_us / 1000000.0;
         prev_us = TIM2->CNT;
 
-        // // we can do imu reads once every 2ms without a problem
-        // Vec3 accel = IMU_Read_Accel_Vec3();
-
-        // // remove acceleration due to gravity
-        // // 3rd row of imu_dir is the z axis of the world frame relative to the imu
-        // accel = vec3_sub(accel, vec3_scale((Vec3) {imu_dir.col1.z, imu_dir.col2.z, imu_dir.col3.z}, G_TO_MM_S_2));
+        Vec3 accel = vec3_sub(IMU_Read_Accel_Vec3(), accel_drift);
         
-        // imu_vel.x += dot(accel, imu_dir.col1) * elapsed_s;
-        // imu_vel.y += dot(accel, imu_dir.col2) * elapsed_s;
-        // imu_vel.z += dot(accel, imu_dir.col3) * elapsed_s;
-        // imu_pos.x += imu_vel.x * elapsed_s;
-        // imu_pos.y += imu_vel.y * elapsed_s;
-        // imu_pos.z += imu_vel.z * elapsed_s;
+        // convert to world frame
+        Vec3 accel_world = mat3_mul_vec3(imu_dir, accel);
+        // remove acceleration due to gravity
+        accel_world.z -= G_TO_MM_S_2;
+
+        // update velocity
+        imu_vel = vec3_add(imu_vel, vec3_scale(accel_world, elapsed_s));
+        imu_vel = vec3_scale(imu_vel, 0.5); // slowdown because deccelerations are hard to measure (need higher freq?)
+
+        // update position
+        imu_pos = vec3_add(imu_pos, vec3_scale(imu_vel, elapsed_s));
 
         // Vec3 rate = IMU_Read_Gyro_Vec3();
         Vec3 rate = vec3_sub(IMU_Read_Gyro_Vec3(), rate_drift);
@@ -798,7 +793,7 @@ void StartDefaultTask(void *argument) {
             QuatF q = quatf_from_mat3(imu_dir);
             float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
             memcpy(&send[4], &data, 4*7);
-            memcpy(&send[4], &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
+            // memcpy(&send[4], &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
             UART_Send(send, 32);
             // UART_Send((uint8_t *)"AAAfghjklqasdfghjklqasdfghjkAAA\n", 32);
             prev_us_print = TIM2->CNT;
