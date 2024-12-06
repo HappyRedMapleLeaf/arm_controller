@@ -143,10 +143,22 @@ const double max_speed_abs = M_PI_2 / 1000; // rad/ms
 Vec3 imu_pos = {0, 0, 0};
 Vec3 imu_vel = {0, 0, 0};
 Mat3 imu_dir = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-Vec3 rate_drift = {0, 0, 0};
+Vec3 gyro_drift = {0, 0, 0};
 Vec3 accel_drift = {0, 0, 0};
 
 bool txReady = true;
+
+// In init: read gyro, data not ready
+// In interrupt: if reading accel, data ready, turn data into vec3, read gyro. if not reading accel, read accel
+// In highFreq: if data ready, data not ready
+// this means dir and pos are constantly taking turns being updated, and
+// highFreq is only reading sets of data if it hasn't already been read
+bool i2cReadingAccel = false;
+bool i2cDataReady = false;
+uint8_t imu_accel_data[6];
+uint8_t imu_gyro_data[6];
+Vec3 imu_accel = {0, 0, 0};
+Vec3 imu_gyro = {0, 0, 0};
 
 /*
 if range is pi, shift is pi/2, then -pi/2 maps to 500, pi/2 maps to 2500
@@ -190,7 +202,25 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-	txReady = true;
+    if (huart->Instance == USART2) {
+	    txReady = true;
+    }
+}
+
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    if (hi2c->Instance == I2C3) {
+        // if reading accel, data ready, turn data into vec3, read gyro. if not reading accel, read accel
+        if (i2cReadingAccel) {
+            i2cDataReady = true;
+            imu_accel = IMU_ConvertAccel(imu_accel_data);
+            imu_gyro = IMU_ConvertGyro(imu_accel_data);
+            i2cReadingAccel = false;
+            IMU_StartReadGyroIT(imu_gyro_data);
+        } else {
+            i2cReadingAccel = true;
+            IMU_StartReadAccelIT(imu_accel_data);
+        }
+    }
 }
 
 int UART_Send(uint8_t *data, uint16_t size)
@@ -248,16 +278,6 @@ int main(void) {
 
     __HAL_RCC_TIM2_CLK_ENABLE();
     TIM2->CR1 = TIM_CR1_CEN;
-
-    IMU_Init();
-
-    // HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 1\n", 15, UART_TX_DELAY);
-    // HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 2\n", 15, UART_TX_DELAY);
-    // HAL_UART_Transmit(&huart2, (uint8_t *)"WE STARTING! 3\n", 15, UART_TX_DELAY);
-    uint8_t start_signal[4*8] = {0};
-    HAL_UART_Transmit(&huart2, start_signal, 32, UART_TX_DELAY);
-    // HAL_UART_Transmit(&huart2, (uint8_t *)"asdfghjklqasdfghjklqasdfghjklqa\n", 32, UART_TX_DELAY);
-
 
     set_angles(arm_angles, arm_pwms);
     set_pwms(arm_pwms);
@@ -671,14 +691,28 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
-void DoCalibration() {
+void SoftReset() {
+    IMU_Reset();
+    HAL_Delay(100);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
+    HAL_I2C_DeInit(&hi2c3);
+    HAL_Delay(100);
+    MX_I2C3_Init();
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
+    HAL_Delay(100);
+    IMU_Reset();
+    IMU_Init();
+
+    uint8_t start_signal[4*8] = {0};
+    HAL_UART_Transmit(&huart2, start_signal, 32, UART_TX_DELAY);
+
     imu_pos = (Vec3) {0, 0, 0};
     imu_vel = (Vec3) {0, 0, 0};
     imu_dir = (Mat3) {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
 
     int64_t prev_us = TIM2->CNT; // microseconds
     uint32_t cal_cycle = 1;
-    rate_drift = IMU_Read_Gyro_Vec3();
+    gyro_drift = IMU_Read_Gyro_Vec3();
     accel_drift = IMU_Read_Accel_Vec3();
 
     // calibration
@@ -686,12 +720,16 @@ void DoCalibration() {
         cal_cycle++;
         Vec3 accel = IMU_Read_Accel_Vec3();
         accel_drift = vec3_add(accel_drift, accel);
-        Vec3 rate = IMU_Read_Gyro_Vec3();
-        rate_drift = vec3_add(rate_drift, rate);
+        Vec3 gyro = IMU_Read_Gyro_Vec3();
+        gyro_drift = vec3_add(gyro_drift, gyro);
     }
     accel_drift = vec3_scale(accel_drift, 1.0 / cal_cycle);
     accel_drift.z -= G_TO_MM_S_2;
-    rate_drift = vec3_scale(rate_drift, 1.0 / cal_cycle);
+    gyro_drift = vec3_scale(gyro_drift, 1.0 / cal_cycle);
+
+    // read gyro, data not ready
+    i2cDataReady = false;
+    IMU_StartReadGyroIT(&imu_gyro_read);
 }
 /* USER CODE END 4 */
 
@@ -704,66 +742,69 @@ void DoCalibration() {
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument) {
     /* USER CODE BEGIN 5 */
+    SoftReset();
     int64_t prev_us = TIM2->CNT; // microseconds
     int64_t prev_us_print = TIM2->CNT; // microseconds
     bool prev_button = false;
-
-    DoCalibration();
 
     /* Infinite loop */
     for (;;) {
         bool button_pressed = HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_SET;
         if (button_pressed && !prev_button) {
-            DoCalibration();
+            SoftReset();
             prev_us = TIM2->CNT; // ignore time spent in calibration; assumed that calibration is done when stationary
+            prev_us_print = TIM2->CNT;
         }
         prev_button = button_pressed;
 
-        int64_t elapsed_us = TIM2->CNT - prev_us;
-        // handle timer value wraparound (once per 1000 seconds)
-        if (elapsed_us < 0) {
-            elapsed_us += 1000000000;
+        if (i2cDataReady) {
+            int64_t elapsed_us = TIM2->CNT - prev_us;
+            // handle timer value wraparound (once per 1000 seconds)
+            if (elapsed_us < 0) {
+                elapsed_us += 1000000000;
+            }
+            double elapsed_s = elapsed_us / 1000000.0;
+            prev_us = TIM2->CNT;
+
+            i2cDataReady = false;
+            Vec3 accel = vec3_sub(imu_accel_read, accel_drift);
+            Vec3 gyro = vec3_sub(imu_gyro_read, gyro_drift);
+
+            // convert to world frame
+            Vec3 accel_world = mat3_mul_vec3(imu_dir, accel);
+            // remove acceleration due to gravity
+            accel_world.z -= G_TO_MM_S_2;
+
+            // update velocity
+            imu_vel = vec3_add(imu_vel, vec3_scale(accel_world, elapsed_s));
+            imu_vel = vec3_scale(imu_vel, 0.5); // slowdown because deccelerations are hard to measure (need higher freq?)
+
+            // update position
+            imu_pos = vec3_add(imu_pos, vec3_scale(imu_vel, elapsed_s));
+
+            double gyro_mag = vec3_mag(gyro);
+            Vec3 gyro_norm = vec3_norm(gyro);
+
+            Mat3 gyro_mat = {{0, -gyro_norm.z, gyro_norm.y},
+                            {gyro_norm.z, 0, -gyro_norm.x},
+                            {-gyro_norm.y, gyro_norm.x, 0}};
+            Mat3 identity_mat = {{1, 0, 0},
+                                {0, 1, 0},
+                                {0, 0, 1}};
+
+            double angle = gyro_mag * elapsed_s;
+            // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%.3f\n", angle);
+            // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 1);
+
+            // Rodrigues' rotation formula
+            // Is the relativity correct? The rotation should be relative to the current orientation, not the world frame
+            // I think it's correct though
+            Mat3 rot_mat = mat3_add(identity_mat, mat3_add(mat3_scale(gyro_mat, sin(angle)), mat3_scale(mat3_mul(gyro_mat, gyro_mat), 1 - cos(angle))));
+
+            imu_dir = mat3_mul(imu_dir, rot_mat);
+
+            // memcpy(&send[4], &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
         }
-        double elapsed_s = elapsed_us / 1000000.0;
-        prev_us = TIM2->CNT;
-
-        Vec3 accel = vec3_sub(IMU_Read_Accel_Vec3(), accel_drift);
-        
-        // convert to world frame
-        Vec3 accel_world = mat3_mul_vec3(imu_dir, accel);
-        // remove acceleration due to gravity
-        accel_world.z -= G_TO_MM_S_2;
-
-        // update velocity
-        imu_vel = vec3_add(imu_vel, vec3_scale(accel_world, elapsed_s));
-        imu_vel = vec3_scale(imu_vel, 0.5); // slowdown because deccelerations are hard to measure (need higher freq?)
-
-        // update position
-        imu_pos = vec3_add(imu_pos, vec3_scale(imu_vel, elapsed_s));
-
-        // Vec3 rate = IMU_Read_Gyro_Vec3();
-        Vec3 rate = vec3_sub(IMU_Read_Gyro_Vec3(), rate_drift);
-
-        double rate_mag = vec3_mag(rate);
-        Vec3 rate_norm = vec3_norm(rate);
-
-        Mat3 rate_mat = {{0, -rate_norm.z, rate_norm.y},
-                         {rate_norm.z, 0, -rate_norm.x},
-                         {-rate_norm.y, rate_norm.x, 0}};
-        Mat3 identity_mat = {{1, 0, 0},
-                             {0, 1, 0},
-                             {0, 0, 1}};
-
-        double angle = rate_mag * elapsed_s;
-        // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%.3f\n", angle);
-        // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 1);
-
-        // Rodrigues' rotation formula
-        // Is the relativity correct? The rotation should be relative to the current orientation, not the world frame
-        // I think it's correct though
-        Mat3 rot_mat = mat3_add(identity_mat, mat3_add(mat3_scale(rate_mat, sin(angle)), mat3_scale(mat3_mul(rate_mat, rate_mat), 1 - cos(angle))));
-
-        imu_dir = mat3_mul(imu_dir, rot_mat);
 
         // // SERVO SETTING
         // for (uint8_t i = 0; i < 7; i++) {
@@ -780,24 +821,6 @@ void StartDefaultTask(void *argument) {
         // }
         // set_angles(arm_angles, arm_pwms);
         // set_pwms(arm_pwms);
-
-        if (TIM2->CNT - prev_us_print > 250000) {
-            uint8_t who = IMU_WhoAmI();
-            // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n%6.4f %6.4f %6.4f\n", 
-            //     who, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z);
-            // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 2);
-
-            uint8_t send[4*8] = {0};
-            send[0] = 0x1;
-            send[1] = who;
-            QuatF q = quatf_from_mat3(imu_dir);
-            float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
-            memcpy(&send[4], &data, 4*7);
-            // memcpy(&send[4], &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
-            UART_Send(send, 32);
-            // UART_Send((uint8_t *)"AAAfghjklqasdfghjklqasdfghjkAAA\n", 32);
-            prev_us_print = TIM2->CNT;
-        }
         // osDelay(1);
     }
     /* USER CODE END 5 */
@@ -812,10 +835,18 @@ void StartDefaultTask(void *argument) {
 /* USER CODE END Header_StartHighFreq */
 void StartHighFreq(void *argument) {
     /* USER CODE BEGIN StartHighFreq */
-    osDelay(2000);
     /* Infinite loop */
     for (;;)
     {
+        uint8_t who = IMU_WhoAmI();
+        uint8_t send[4*8] = {0};
+        send[0] = 0x1;
+        send[1] = who;
+        QuatF q = quatf_from_mat3(imu_dir);
+        float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
+        memcpy(&send[4], &data, 4*7);
+        UART_Send(send, 32);
+        osDelay(250);
         // send back the imu position
         // 3 doubles for position
         // 3 doubles for +z axis
@@ -846,7 +877,6 @@ void StartHighFreq(void *argument) {
         // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%d\n%9.6f %9.6f %9.6f\n", 
         //     who, imu_dir.col1.x, imu_dir.col1.y, imu_dir.col1.z);
         // HAL_UART_Transmit(&huart2, (uint8_t *)print_buf, print_len, 5);
-        osDelay(1000);
     }
     /* USER CODE END StartHighFreq */
 }

@@ -48,4 +48,9 @@ Vec3 IMU_Read_Accel_Vec3();
 // units: rad/s
 Vec3 IMU_Read_Gyro_Vec3();
 
+void IMU_StartReadGyroIT(uint8_t * data);
+Vec3 IMU_ConvertGyro(uint8_t * data);
+void IMU_StartReadAccelIT(uint8_t * data);
+Vec3 IMU_ConvertAccel(uint8_t * data);
+
 #endif /* INC_IMU_H_ */

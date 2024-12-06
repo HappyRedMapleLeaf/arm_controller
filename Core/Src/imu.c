@@ -1,8 +1,6 @@
 #include "imu.h"
 #include <math.h>
 
-#include "stm32f4xx_hal.h"
-
 #define TIMEOUT_MS                      1
 #define I2C_ADDRESS                     0x68
 
@@ -172,9 +170,8 @@ double IMU_Read_Temp() {
 }
 
 void IMU_Init() {
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
     HAL_Delay(100);
-    IMU_Reset();
+    IMU_Change_User_Bank(0);
     // default startup is 0x41, we want to disable sleep
     // which is the 2nd byte so it becomes 0x01
     I2C_Write_Byte(PWR_MGMT_1, 0x01);
@@ -190,11 +187,17 @@ void IMU_Reset() {
 }
 
 Vec3 IMU_Read_Accel_Vec3() {
-    IMU_Change_User_Bank(0);
-
     uint8_t data[6];
     I2C_Read_Bytes(ACCEL_X_MSB_REGISTER, data, 6);
 
+    return IMU_ConvertAccel(data);
+}
+
+void IMU_StartReadAccelIT(uint8_t * data) {
+    HAL_I2C_Mem_Read_IT(&hi2c3, (I2C_ADDRESS << 1) | 1, ACCEL_X_MSB_REGISTER, I2C_MEMADD_SIZE_8BIT, data, 6);
+}
+
+Vec3 IMU_ConvertAccel(uint8_t * data) {
     int16_t x = (data[0] << 8) | data[1];
     int16_t y = (data[2] << 8) | data[3];
     int16_t z = (data[4] << 8) | data[5];
@@ -209,11 +212,17 @@ Vec3 IMU_Read_Accel_Vec3() {
 }
 
 Vec3 IMU_Read_Gyro_Vec3() {
-    IMU_Change_User_Bank(0);
-
     uint8_t data[6];
     I2C_Read_Bytes(GYRO_X_MSB_REGISTER, data, 6);
 
+    return IMU_ConvertGyro(data);
+}
+
+void IMU_StartReadGyroIT(uint8_t * data) {
+    HAL_I2C_Mem_Read_IT(&hi2c3, (I2C_ADDRESS << 1) | 1, GYRO_X_MSB_REGISTER, I2C_MEMADD_SIZE_8BIT, data, 6);
+}
+
+Vec3 IMU_ConvertGyro(uint8_t * data) {
     int16_t x = (data[0] << 8) | data[1];
     int16_t y = (data[2] << 8) | data[3];
     int16_t z = (data[4] << 8) | data[5];
