@@ -1,6 +1,8 @@
 #include "imu.h"
 #include <math.h>
 
+#include "stm32f4xx_hal.h"
+
 #define TIMEOUT_MS                      1
 #define I2C_ADDRESS                     0x68
 
@@ -170,8 +172,9 @@ double IMU_Read_Temp() {
 }
 
 void IMU_Init() {
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
     HAL_Delay(100);
-    IMU_Change_User_Bank(0);
+    IMU_Reset();
     // default startup is 0x41, we want to disable sleep
     // which is the 2nd byte so it becomes 0x01
     I2C_Write_Byte(PWR_MGMT_1, 0x01);
