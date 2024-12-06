@@ -729,7 +729,7 @@ void SoftReset() {
 
     // read gyro, data not ready
     i2cDataReady = false;
-    IMU_StartReadGyroIT(&imu_gyro_read);
+    IMU_StartReadGyroIT(imu_gyro_data);
 }
 /* USER CODE END 4 */
 
@@ -744,7 +744,6 @@ void StartDefaultTask(void *argument) {
     /* USER CODE BEGIN 5 */
     SoftReset();
     int64_t prev_us = TIM2->CNT; // microseconds
-    int64_t prev_us_print = TIM2->CNT; // microseconds
     bool prev_button = false;
 
     /* Infinite loop */
@@ -753,7 +752,6 @@ void StartDefaultTask(void *argument) {
         if (button_pressed && !prev_button) {
             SoftReset();
             prev_us = TIM2->CNT; // ignore time spent in calibration; assumed that calibration is done when stationary
-            prev_us_print = TIM2->CNT;
         }
         prev_button = button_pressed;
 
@@ -767,8 +765,8 @@ void StartDefaultTask(void *argument) {
             prev_us = TIM2->CNT;
 
             i2cDataReady = false;
-            Vec3 accel = vec3_sub(imu_accel_read, accel_drift);
-            Vec3 gyro = vec3_sub(imu_gyro_read, gyro_drift);
+            Vec3 accel = vec3_sub(imu_accel, accel_drift);
+            Vec3 gyro = vec3_sub(imu_gyro, gyro_drift);
 
             // convert to world frame
             Vec3 accel_world = mat3_mul_vec3(imu_dir, accel);
