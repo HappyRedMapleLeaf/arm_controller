@@ -148,17 +148,26 @@ Vec3 accel_drift = {0, 0, 0};
 
 bool txReady = true;
 
-// In init: read gyro, data not ready
-// In interrupt: if reading accel, data ready, turn data into vec3, read gyro. if not reading accel, read accel
-// In highFreq: if data ready, data not ready
+bool initializing = true;
+
+// In init: start read (whoami), data not ready
+// In interrupt: if reading 0 then read 1. if reading 1 then read 2. if reading 2 then data ready, copy and convert, data ready
+// In highFreq: if data ready, use the data then set data to not ready
 // this means dir and pos are constantly taking turns being updated, and
 // highFreq is only reading sets of data if it hasn't already been read
-bool i2cReadingAccel = false;
+uint8_t i2cReadState = 0;
 bool i2cDataReady = false;
+
+uint8_t imu_whoami_data[1];
 uint8_t imu_accel_data[6];
 uint8_t imu_gyro_data[6];
+uint8_t imu_whoami_copy[1];
+uint8_t imu_accel_copy[6];
+uint8_t imu_gyro_copy[6];
+
 Vec3 imu_accel = {0, 0, 0};
 Vec3 imu_gyro = {0, 0, 0};
+uint8_t imu_whoami;
 
 /*
 if range is pi, shift is pi/2, then -pi/2 maps to 500, pi/2 maps to 2500
@@ -208,19 +217,35 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 }
 
 void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    // order: read whoami (0), then accel (1), then gyro (2)
     if (hi2c->Instance == I2C3) {
-        // if reading accel, data ready, turn data into vec3, read gyro. if not reading accel, read accel
-        if (i2cReadingAccel) {
-            i2cDataReady = true;
-            imu_accel = IMU_ConvertAccel(imu_accel_data);
-            imu_gyro = IMU_ConvertGyro(imu_accel_data);
-            i2cReadingAccel = false;
-            IMU_StartReadGyroIT(imu_gyro_data);
-        } else {
-            i2cReadingAccel = true;
-            IMU_StartReadAccelIT(imu_accel_data);
+        switch (i2cReadState) {
+            case 0:
+                IMU_StartReadAccelIT(imu_accel_data);
+                i2cReadState = 1;
+                break;
+            case 1:
+                IMU_StartReadGyroIT(imu_gyro_data);
+                i2cReadState = 2;
+                break;
+            case 2:
+                i2cDataReady = true;
+                // TODO: COPY DATA TO COPY
+                
+                imu_whoami = imu_whoami_data[0];
+                i2cReadState = 0;
+                IMU_StartReadGyroIT(imu_gyro_data);
+                break;
+            default:
+                break;
         }
     }
+}
+
+void StartI2CRead() {
+    i2cReadState = 0;
+    i2cDataReady = false;
+    IMU_WhoAmIIT(imu_whoami_data);
 }
 
 int UART_Send(uint8_t *data, uint16_t size)
@@ -692,19 +717,26 @@ static void MX_GPIO_Init(void) {
 
 /* USER CODE BEGIN 4 */
 void SoftReset() {
+    // TODO: NEED TO STOP THE CONSTANT I2C READS DURING SOFTRESET
+    initializing = true;
+
     IMU_Reset();
-    HAL_Delay(100);
+    HAL_Delay(150);
+
+    // send between waits to make sure uart isnt blocked on another send
+    // (setting initializing to true guarantees nothing extra will be sent
+    // starting from then)
+    uint8_t start_signal[4*8] = {0};
+    UART_Send(start_signal, 32);
+
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
     HAL_I2C_DeInit(&hi2c3);
-    HAL_Delay(100);
+    HAL_Delay(150);
     MX_I2C3_Init();
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
-    HAL_Delay(100);
+    HAL_Delay(150);
     IMU_Reset();
     IMU_Init();
-
-    uint8_t start_signal[4*8] = {0};
-    HAL_UART_Transmit(&huart2, start_signal, 32, UART_TX_DELAY);
 
     imu_pos = (Vec3) {0, 0, 0};
     imu_vel = (Vec3) {0, 0, 0};
@@ -727,9 +759,8 @@ void SoftReset() {
     accel_drift.z -= G_TO_MM_S_2;
     gyro_drift = vec3_scale(gyro_drift, 1.0 / cal_cycle);
 
-    // read gyro, data not ready
-    i2cDataReady = false;
-    IMU_StartReadGyroIT(imu_gyro_data);
+    StartI2CRead();
+    initializing = false;
 }
 /* USER CODE END 4 */
 
@@ -748,6 +779,8 @@ void StartDefaultTask(void *argument) {
 
     /* Infinite loop */
     for (;;) {
+        // ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
         bool button_pressed = HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_SET;
         if (button_pressed && !prev_button) {
             SoftReset();
@@ -765,8 +798,8 @@ void StartDefaultTask(void *argument) {
             prev_us = TIM2->CNT;
 
             i2cDataReady = false;
-            Vec3 accel = vec3_sub(imu_accel, accel_drift);
-            Vec3 gyro = vec3_sub(imu_gyro, gyro_drift);
+            Vec3 accel = vec3_sub(IMU_ConvertAccel(imu_accel_copy), accel_drift);
+            Vec3 gyro = vec3_sub(IMU_ConvertGyro(imu_gyro_copy), gyro_drift);
 
             // convert to world frame
             Vec3 accel_world = mat3_mul_vec3(imu_dir, accel);
@@ -801,7 +834,7 @@ void StartDefaultTask(void *argument) {
 
             imu_dir = mat3_mul(imu_dir, rot_mat);
 
-            // memcpy(&send[4], &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
+            memcpy(&imu_pos, &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
         }
 
         // // SERVO SETTING
@@ -836,14 +869,16 @@ void StartHighFreq(void *argument) {
     /* Infinite loop */
     for (;;)
     {
-        uint8_t who = IMU_WhoAmI();
-        uint8_t send[4*8] = {0};
-        send[0] = 0x1;
-        send[1] = who;
-        QuatF q = quatf_from_mat3(imu_dir);
-        float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
-        memcpy(&send[4], &data, 4*7);
-        UART_Send(send, 32);
+        if (!initializing) {
+            uint8_t who = IMU_WhoAmI();
+            uint8_t send[4*8] = {0};
+            send[0] = 0x1;
+            send[1] = who;
+            QuatF q = quatf_from_mat3(imu_dir);
+            float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
+            memcpy(&send[4], &data, 4*7);
+            UART_Send(send, 32);
+        }
         osDelay(250);
         // send back the imu position
         // 3 doubles for position

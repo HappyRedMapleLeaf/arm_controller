@@ -108,10 +108,14 @@ void IMU_Set_Gyro_Range(uint8_t gyro_fs_new) {
 }
 
 uint8_t IMU_WhoAmI() {
-    IMU_Change_User_Bank(0);
+    // IMU_Change_User_Bank(0);
     uint8_t res;
     I2C_Read_Byte(WHO_AM_I, &res);
     return res;
+}
+
+void IMU_WhoAmIIT(uint8_t * res) {
+    HAL_I2C_Mem_Read_IT(&hi2c3, (I2C_ADDRESS << 1) | 1, WHO_AM_I, I2C_MEMADD_SIZE_8BIT, res, 1);
 }
 
 double IMU_Read_Accel(uint8_t axis) {
