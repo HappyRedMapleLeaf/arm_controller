@@ -155,19 +155,19 @@ bool initializing = true;
 // In highFreq: if data ready, use the data then set data to not ready
 // this means dir and pos are constantly taking turns being updated, and
 // highFreq is only reading sets of data if it hasn't already been read
-uint8_t i2cReadState = 0;
-bool i2cDataReady = false;
+volatile uint8_t i2cReadState = 0;
+volatile bool i2cDataReady = false;
+volatile bool i2cEnable = false;
 
-uint8_t imu_whoami_data[1];
-uint8_t imu_accel_data[6];
-uint8_t imu_gyro_data[6];
-uint8_t imu_whoami_copy[1];
-uint8_t imu_accel_copy[6];
-uint8_t imu_gyro_copy[6];
+volatile uint8_t imu_whoami_data[1];
+volatile uint8_t imu_whoami;
+volatile uint8_t imu_accel_data[6];
+volatile uint8_t imu_gyro_data[6];
+volatile uint8_t imu_accel_copy[6];
+volatile uint8_t imu_gyro_copy[6];
 
 Vec3 imu_accel = {0, 0, 0};
 Vec3 imu_gyro = {0, 0, 0};
-uint8_t imu_whoami;
 
 /*
 if range is pi, shift is pi/2, then -pi/2 maps to 500, pi/2 maps to 2500
@@ -230,11 +230,13 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
                 break;
             case 2:
                 i2cDataReady = true;
-                // TODO: COPY DATA TO COPY
-                
+                memcpy(imu_accel_copy, imu_accel_data, 6);
+                memcpy(imu_gyro_copy, imu_gyro_data, 6);
                 imu_whoami = imu_whoami_data[0];
-                i2cReadState = 0;
-                IMU_StartReadGyroIT(imu_gyro_data);
+                if (i2cEnable) {
+                    i2cReadState = 0;
+                    IMU_WhoAmIIT(imu_whoami_data);
+                }
                 break;
             default:
                 break;
@@ -243,6 +245,7 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
 }
 
 void StartI2CRead() {
+    i2cEnable = true;
     i2cReadState = 0;
     i2cDataReady = false;
     IMU_WhoAmIIT(imu_whoami_data);
@@ -717,8 +720,13 @@ static void MX_GPIO_Init(void) {
 
 /* USER CODE BEGIN 4 */
 void SoftReset() {
-    // TODO: NEED TO STOP THE CONSTANT I2C READS DURING SOFTRESET
+    // STOP THE CONSTANT I2C READS DURING SOFTRESET
     initializing = true;
+    i2cEnable = false;
+    while (!i2cDataReady) {
+        // wait for i2c to finish
+        HAL_Delay(1);
+    }
 
     IMU_Reset();
     HAL_Delay(150);
