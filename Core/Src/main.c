@@ -155,16 +155,16 @@ bool initializing = true;
 // In highFreq: if data ready, use the data then set data to not ready
 // this means dir and pos are constantly taking turns being updated, and
 // highFreq is only reading sets of data if it hasn't already been read
-volatile uint8_t i2cReadState = 0;
-volatile bool i2cDataReady = false;
-volatile bool i2cEnable = false;
+uint8_t i2cReadState = 0;
+bool i2cDataReady = false;
+bool i2cEnable = false;
 
-volatile uint8_t imu_whoami_data[1];
-volatile uint8_t imu_whoami;
-volatile uint8_t imu_accel_data[6];
-volatile uint8_t imu_gyro_data[6];
-volatile uint8_t imu_accel_copy[6];
-volatile uint8_t imu_gyro_copy[6];
+uint8_t imu_whoami_data[1];
+uint8_t imu_whoami;
+uint8_t imu_accel_data[6];
+uint8_t imu_gyro_data[6];
+uint8_t imu_accel_copy[6];
+uint8_t imu_gyro_copy[6];
 
 Vec3 imu_accel = {0, 0, 0};
 Vec3 imu_gyro = {0, 0, 0};

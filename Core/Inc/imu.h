@@ -17,6 +17,7 @@ void IMU_Init();
 
 // expect 0xE1
 uint8_t IMU_WhoAmI();
+void IMU_WhoAmIIT(uint8_t * res);
 
 // call IMU_Init() after
 void IMU_Reset();
