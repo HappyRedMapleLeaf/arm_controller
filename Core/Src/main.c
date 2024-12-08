@@ -150,17 +150,17 @@ bool txReady = true;
 
 bool initializing = true;
 
+int32_t debug_timing = 0;
+
 // In init: start read (whoami), data not ready
 // In interrupt: if reading 0 then read 1. if reading 1 then read 2. if reading 2 then data ready, copy and convert, data ready
 // In highFreq: if data ready, use the data then set data to not ready
 // this means dir and pos are constantly taking turns being updated, and
 // highFreq is only reading sets of data if it hasn't already been read
 uint8_t i2cReadState = 0;
-bool i2cDataReady = false;
+bool i2cDataReady = true;
 bool i2cEnable = false;
 
-uint8_t imu_whoami_data[1];
-uint8_t imu_whoami;
 uint8_t imu_accel_data[6];
 uint8_t imu_gyro_data[6];
 uint8_t imu_accel_copy[6];
@@ -218,6 +218,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
     // order: read whoami (0), then accel (1), then gyro (2)
+    // this read cycle currently takes 462us on average without other processing
     if (hi2c->Instance == I2C3) {
         switch (i2cReadState) {
             case 0:
@@ -226,16 +227,12 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
                 break;
             case 1:
                 IMU_StartReadGyroIT(imu_gyro_data);
-                i2cReadState = 2;
-                break;
-            case 2:
-                i2cDataReady = true;
                 memcpy(imu_accel_copy, imu_accel_data, 6);
                 memcpy(imu_gyro_copy, imu_gyro_data, 6);
-                imu_whoami = imu_whoami_data[0];
+                i2cDataReady = true;
                 if (i2cEnable) {
                     i2cReadState = 0;
-                    IMU_WhoAmIIT(imu_whoami_data);
+                    IMU_StartReadAccelIT(imu_accel_data);
                 }
                 break;
             default:
@@ -248,7 +245,7 @@ void StartI2CRead() {
     i2cEnable = true;
     i2cReadState = 0;
     i2cDataReady = false;
-    IMU_WhoAmIIT(imu_whoami_data);
+    IMU_StartReadAccelIT(imu_accel_data);
 }
 
 int UART_Send(uint8_t *data, uint16_t size)
@@ -468,7 +465,7 @@ static void MX_I2C3_Init(void) {
 
     /* USER CODE END I2C3_Init 1 */
     hi2c3.Instance = I2C3;
-    hi2c3.Init.ClockSpeed = 100000;
+    hi2c3.Init.ClockSpeed = 400000;
     hi2c3.Init.DutyCycle = I2C_DUTYCYCLE_2;
     hi2c3.Init.OwnAddress1 = 0;
     hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -730,13 +727,6 @@ void SoftReset() {
 
     IMU_Reset();
     HAL_Delay(150);
-
-    // send between waits to make sure uart isnt blocked on another send
-    // (setting initializing to true guarantees nothing extra will be sent
-    // starting from then)
-    uint8_t start_signal[4*8] = {0};
-    UART_Send(start_signal, 32);
-
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
     HAL_I2C_DeInit(&hi2c3);
     HAL_Delay(150);
@@ -746,17 +736,31 @@ void SoftReset() {
     IMU_Reset();
     IMU_Init();
 
+    uint8_t who = IMU_WhoAmI();
+
+    if (who != 0xE1) {
+        // error, turn off imu, the power LED should turn off
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
+        while (1) {}
+    }
+
+    // send between waits to make sure uart isnt blocked on another send
+    // (setting initializing to true guarantees nothing extra will be sent
+    // starting from then)
+    uint8_t start_signal[4*8] = {0};
+    UART_Send(start_signal, 32);
+
     imu_pos = (Vec3) {0, 0, 0};
     imu_vel = (Vec3) {0, 0, 0};
     imu_dir = (Mat3) {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
 
-    int64_t prev_us = TIM2->CNT; // microseconds
+    int32_t init_us = TIM2->CNT; // microseconds
     uint32_t cal_cycle = 1;
     gyro_drift = IMU_Read_Gyro_Vec3();
     accel_drift = IMU_Read_Accel_Vec3();
 
     // calibration
-    while (TIM2->CNT - prev_us < 500000) {
+    while (TIM2->CNT - init_us < 500000) {
         cal_cycle++;
         Vec3 accel = IMU_Read_Accel_Vec3();
         accel_drift = vec3_add(accel_drift, accel);
@@ -766,6 +770,9 @@ void SoftReset() {
     accel_drift = vec3_scale(accel_drift, 1.0 / cal_cycle);
     accel_drift.z -= G_TO_MM_S_2;
     gyro_drift = vec3_scale(gyro_drift, 1.0 / cal_cycle);
+
+    // print_len = snprintf(print_buf, PRINT_BUF_SIZE, "%.3f\n", angle);
+    // UART_Send((uint8_t *)print_buf, print_len);
 
     StartI2CRead();
     initializing = false;
@@ -782,7 +789,7 @@ void SoftReset() {
 void StartDefaultTask(void *argument) {
     /* USER CODE BEGIN 5 */
     SoftReset();
-    int64_t prev_us = TIM2->CNT; // microseconds
+    int32_t prev_us = TIM2->CNT; // microseconds
     bool prev_button = false;
 
     /* Infinite loop */
@@ -797,13 +804,14 @@ void StartDefaultTask(void *argument) {
         prev_button = button_pressed;
 
         if (i2cDataReady) {
-            int64_t elapsed_us = TIM2->CNT - prev_us;
+            int32_t timer_reading = TIM2->CNT;
+            int32_t elapsed_us = timer_reading - prev_us;
+            prev_us = timer_reading;
             // handle timer value wraparound (once per 1000 seconds)
             if (elapsed_us < 0) {
                 elapsed_us += 1000000000;
             }
             double elapsed_s = elapsed_us / 1000000.0;
-            prev_us = TIM2->CNT;
 
             i2cDataReady = false;
             Vec3 accel = vec3_sub(IMU_ConvertAccel(imu_accel_copy), accel_drift);
@@ -842,7 +850,7 @@ void StartDefaultTask(void *argument) {
 
             imu_dir = mat3_mul(imu_dir, rot_mat);
 
-            memcpy(&imu_pos, &elapsed_us, 8); // TEMP DEBUG TO SEE LOOP TIMINGS
+            debug_timing = elapsed_us;
         }
 
         // // SERVO SETTING
@@ -878,13 +886,12 @@ void StartHighFreq(void *argument) {
     for (;;)
     {
         if (!initializing) {
-            uint8_t who = IMU_WhoAmI();
             uint8_t send[4*8] = {0};
             send[0] = 0x1;
-            send[1] = who;
             QuatF q = quatf_from_mat3(imu_dir);
             float data[7] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w};
             memcpy(&send[4], &data, 4*7);
+            memcpy(&send[4], &debug_timing, 4); // TEMP DEBUG TO SEE LOOP TIMINGS
             UART_Send(send, 32);
         }
         osDelay(250);
