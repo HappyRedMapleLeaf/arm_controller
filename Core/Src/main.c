@@ -855,7 +855,7 @@ void StartDefaultTask(void *argument) {
             // ignore rates of less than ~1 deg/s
             // lets hope this change doesnt snowball into catastrophic disaster
             if (gyro_mag > 0.015) {
-                Vec3 gyro_norm = vec3_scale(gyro_norm, 1.0 / gyro_mag);
+                Vec3 gyro_norm = vec3_scale(gyro, 1.0 / gyro_mag);
 
                 Mat3 gyro_mat = {{ 0,           -gyro_norm.z,  gyro_norm.y},
                                  { gyro_norm.z,  0,           -gyro_norm.x},
@@ -872,8 +872,11 @@ void StartDefaultTask(void *argument) {
                 // The rotation should be relative to the current orientation, not the world frame
                 Mat3 rot_mat = mat3_add(identity_mat, mat3_add(mat3_scale(gyro_mat, sin(angle)), mat3_scale(mat3_mul(gyro_mat, gyro_mat), 1 - cos(angle))));
 
-                // Mat3 rot_mat_rel = mat3_mul(imu_dir, rot_mat);
-                imu_dir = mat3_mul(rot_mat, imu_dir);
+                // imu_dir = mat3_mul(rot_mat, imu_dir);
+                // think of it this way: rot_mat is the destination frame relative to imu frame, and doing imu frame * rot_mat transforms
+                // rot_mat (goal) from the imu frame to the global frame. As opposed to the above, which is what we would do if rot_mat
+                // was expressed relative to the world frame.
+                imu_dir = mat3_mul(imu_dir, rot_mat);
             }
 
             // debug_timing = elapsed_us;
@@ -915,8 +918,8 @@ void StartHighFreq(void *argument) {
             uint8_t send[MSG_LEN] = {0};
             send[0] = 0x1;
             QuatF q = quatf_from_mat3(imu_dir);
-            // float data[MSG_LEN - 1] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w, 0, 0, 0, 0};
-            float data[MSG_LEN - 1] = {imu_dir.col1.x, imu_dir.col1.y, imu_dir.col1.z, imu_dir.col2.x, imu_dir.col2.y, imu_dir.col2.z, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z, debug.y, debug.z};
+            float data[MSG_LEN - 1] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w, 0, 0, 0, 0};
+            // float data[MSG_LEN - 1] = {imu_dir.col1.x, imu_dir.col1.y, imu_dir.col1.z, imu_dir.col2.x, imu_dir.col2.y, imu_dir.col2.z, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z, debug.x, debug.y};
             memcpy(&send[2], &data, MSG_LEN - 4);
             // memcpy(&send[2], &debug_timing, 4); // TEMP DEBUG TO SEE LOOP TIMINGS
             send[MSG_LEN - 1] = 0xFF;
