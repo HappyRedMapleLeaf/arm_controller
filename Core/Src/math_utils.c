@@ -18,7 +18,7 @@ double vec3_mag(Vec3 a) {
 }
 
 Vec3 vec3_norm(Vec3 a) {
-    return vec3_scale(a, 1 / vec3_mag(a));
+    return vec3_scale(a, 1.0 / vec3_mag(a));
 }
 
 Vec3 vec3_proj(Vec3 a, Vec3 b) {
@@ -88,6 +88,9 @@ QuatF quatf_scale(QuatF q, float a) {
 
 QuatF quatf_from_mat3(Mat3 a) {
     // https://d3cw3dd2w32x2b.cloudfront.net/wp-content/uploads/2015/01/matrix-to-quat.pdf
+    // they tell us that their formula uses transposed matrix. I'm too lazy to do it manually for now...
+    a = mat3_transpose(a);
+
     float t;
     QuatF q;
 
