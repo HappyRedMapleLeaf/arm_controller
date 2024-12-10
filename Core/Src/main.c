@@ -759,29 +759,29 @@ void SoftReset() {
     int32_t init_us = TIM2->CNT; // microseconds
     uint32_t cal_cycle = 1;
     gyro_drift = IMU_Read_Gyro_Vec3();
-    // Vec3 average_accel = IMU_Read_Accel_Vec3();
+    Vec3 average_accel = IMU_Read_Accel_Vec3();
 
     // calibration
     while (TIM2->CNT - init_us < 500000) {
         cal_cycle++;
-        // Vec3 accel = IMU_Read_Accel_Vec3();
-        // average_accel = vec3_add(average_accel, accel);
+        Vec3 accel = IMU_Read_Accel_Vec3();
+        average_accel = vec3_add(average_accel, accel);
         Vec3 gyro = IMU_Read_Gyro_Vec3();
         gyro_drift = vec3_add(gyro_drift, gyro);
     }
-    // average_accel = vec3_scale(average_accel, 1.0 / cal_cycle);
+    average_accel = vec3_scale(average_accel, 1.0 / cal_cycle);
     gyro_drift = vec3_scale(gyro_drift, 1.0 / cal_cycle);
 
-    // // when stationary, there is a 1g acceleration directly upwards
-    // // here we calculate the world frame relative to the imu, then invert (transpose) to get the
-    // // imu frame relative to the world
-    // Vec3 new_z = vec3_norm(average_accel);
-    // Vec3 new_x = vec3_norm(vec3_sub(imu_dir.col1, vec3_scale(new_z, dot(new_z, imu_dir.col1))));
-    // Vec3 new_y = vec3_cross(new_z, new_x);
-    // accel_drift = vec3_sub(average_accel, vec3_scale(new_z, G_TO_MM_S_2));
+    // when stationary, there is a 1g acceleration directly upwards
+    // here we calculate the world frame relative to the imu, then invert (transpose) to get the
+    // imu frame relative to the world
+    Vec3 new_z = vec3_norm(average_accel);
+    Vec3 new_x = vec3_norm(vec3_sub(imu_dir.col1, vec3_scale(new_z, dot(new_z, imu_dir.col1))));
+    Vec3 new_y = vec3_cross(new_z, new_x);
+    accel_drift = vec3_sub(average_accel, vec3_scale(new_z, G_TO_MM_S_2));
 
-    // imu_dir = (Mat3){new_x, new_y, new_z};
-    // imu_dir = mat3_transpose(imu_dir);
+    imu_dir = (Mat3){new_x, new_y, new_z};
+    imu_dir = mat3_transpose(imu_dir);
 
     StartI2CRead();
     initializing = false;
@@ -823,34 +823,36 @@ void StartDefaultTask(void *argument) {
             double elapsed_s = elapsed_us / 1000000.0;
 
             i2cDataReady = false;
-            // Vec3 accel = IMU_ConvertAccel(imu_accel_copy);
+            Vec3 accel = vec3_sub(IMU_ConvertAccel(imu_accel_copy), accel_drift);
             Vec3 gyro = vec3_sub(IMU_ConvertGyro(imu_gyro_copy), gyro_drift);
 
-            // Vec3 world_z_rel_imu = (Vec3) {imu_dir.col1.z, imu_dir.col2.z, imu_dir.col3.z};
+            // convert to world frame
+            Vec3 accel_world = mat3_mul_vec3(imu_dir, accel);
+            
+            accel_world = vec3_sub(accel_world, (Vec3) {0, 0, G_TO_MM_S_2});
 
-            // remove acceleration due to gravity
-            // accel = vec3_sub(accel, vec3_scale(world_z_rel_imu, G_TO_MM_S_2));
+            // debug = accel_world;
 
-            // // convert to world frame
-            // Vec3 accel_world = mat3_mul_vec3(imu_dir, accel);
+            // // remove noise
+            // if (vec3_mag(accel_world) < 400) {
+            //     accel_world = (Vec3){0, 0, 0};
+            // }
 
-            // // // remove noise
-            // // if (vec3_mag(accel_world) < G_TO_MM_S_2 * 0.02) {
-            // //     accel_world = (Vec3){0, 0, 0};
-            // // }
+            // update velocity
+            imu_vel = vec3_add(imu_vel, vec3_scale(accel_world, elapsed_s));
 
-            // // update velocity
-            // imu_vel = vec3_add(imu_vel, vec3_scale(accel_world, elapsed_s));
+            // // scale down velocity
+            // imu_vel = vec3_scale(imu_vel, 0.95);
 
-            // // // scale down velocity
-            // // imu_vel = vec3_scale(imu_vel, 0.5);
+            // // remove noise
+            // if (vec3_mag(imu_vel) < 0.3) {
+            //     imu_vel = (Vec3){0, 0, 0};
+            // }
 
-            // // update position
-            // imu_pos = vec3_add(imu_pos, vec3_scale(imu_vel, elapsed_s));
+            // update position
+            imu_pos = vec3_add(imu_pos, vec3_scale(imu_vel, elapsed_s));
 
             double gyro_mag = vec3_mag(gyro);
-
-            debug = gyro;
 
             // ignore rates of less than ~1 deg/s
             // lets hope this change doesnt snowball into catastrophic disaster
@@ -916,9 +918,9 @@ void StartHighFreq(void *argument) {
     {
         if (!initializing) {
             uint8_t send[MSG_LEN] = {0};
-            send[0] = 0x1;
+            send[0] = 0xFF;
             QuatF q = quatf_from_mat3(imu_dir);
-            float data[MSG_LEN - 1] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w, 0, 0, 0, 0};
+            float data[MSG_LEN / 4 - 1] = {imu_pos.x, imu_pos.y, imu_pos.z, q.x, q.y, q.z, q.w, debug.x, debug.y, debug.z, 0};
             // float data[MSG_LEN - 1] = {imu_dir.col1.x, imu_dir.col1.y, imu_dir.col1.z, imu_dir.col2.x, imu_dir.col2.y, imu_dir.col2.z, imu_dir.col3.x, imu_dir.col3.y, imu_dir.col3.z, debug.x, debug.y};
             memcpy(&send[2], &data, MSG_LEN - 4);
             // memcpy(&send[2], &debug_timing, 4); // TEMP DEBUG TO SEE LOOP TIMINGS
