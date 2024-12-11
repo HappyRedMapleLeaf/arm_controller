@@ -118,7 +118,8 @@ double arm_targets[7] = {0, M_PI_2, M_PI_2, 0, 0, 0, 0};
 double arm_angles[7] = {0, M_PI_2, M_PI_2, 0, 0, 0, 0};
 double arm_speeds[7] = {0, 0, 0, 0, 0, 0, 0};
 uint32_t arm_pwms[7] = {0, 0, 0, 0, 0, 0, 0};
-const double tx_rate = 20.0;                // ms
+// An assumption of how often we will receive move commands from host
+const double TX_RATE = 20.0;                // ms
 const double max_speed_abs = M_PI_2 / 1000; // rad/ms
 
 bool txReady = true;
@@ -133,7 +134,7 @@ nudge is for small adjustments in case the servo is not centered
 */
 const double ranges[7] = {3 * M_PI / 2 * 0.98, M_PI * 1.03, 3 * M_PI / 2 * 0.98, 3 * M_PI / 2, M_PI, M_PI, M_PI};
 const double shifts[7] = {0, M_PI * 0.03 / 2, 3 * M_PI / 2 * 0.49 - M_PI / 2, 3 * M_PI / 4, M_PI / 2, M_PI / 2, M_PI / 2};
-const double nudges[7] = {0, 0, 65, 0, 50, 50, 0};
+const double nudges[7] = {0, 0, 90, 20, 60, 25, 0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -671,11 +672,10 @@ void SoftReset() {
         arm_pwms[i] = pwm_values[i];
     }
 
-    // send between waits to make sure uart isnt blocked on another send
-    // (setting initializing to true guarantees nothing extra will be sent
-    // starting from then)
-    uint8_t start_signal[MSG_LEN] = {0};
-    UART_Send(start_signal, MSG_LEN);
+    // uint8_t start_signal[MSG_LEN] = {0};
+    // UART_Send(start_signal, MSG_LEN);
+    print_len = snprintf(print_buf, PRINT_BUF_SIZE, "WE STARTING!\n");
+    UART_Send((uint8_t *)print_buf, print_len);
 
     HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
     initializing = false;
@@ -705,13 +705,41 @@ void StartDefaultTask(void *argument) {
             prev_us = TIM2->CNT; // ignore time spent in calibration; assumed that calibration is done when stationary
         }
         prev_button = button_pressed;
-        
+
+        int32_t timer_reading = TIM2->CNT;
+        int32_t elapsed_us = timer_reading - prev_us;
+        prev_us = timer_reading;
+        // handle timer value wraparound (once per 1000 seconds)
+        if (elapsed_us < 0) {
+            elapsed_us += 1000000000;
+        }
         double elapsed_ms = elapsed_us / 1000.0;
 
-        if (uart_cmd_ready) {
-            
-        }
+        if (uart_cmd_ready) {            
+            uart_cmd_ready = false;
 
+            switch (command[0]) {
+            case CMD_SET_ANGLE:
+                for (uint8_t i = 0; i < 7; i++) {
+                    uint8_t offset = 8 + i * 8;
+                    double angle = *((double *)&command[offset]);
+                    arm_targets[i] = angle;
+                    arm_speeds[i] = (arm_targets[i] - arm_angles[i]) / TX_RATE;
+
+                    // limit arm speed (especially for arm up/down switching movements)
+                    arm_speeds[i] = (arm_speeds[i] > max_speed_abs) ? max_speed_abs : arm_speeds[i];
+                    arm_speeds[i] = (arm_speeds[i] < -max_speed_abs) ? -max_speed_abs : arm_speeds[i];
+                }
+                break;
+            case CMD_SET_PWM:
+                for (uint8_t i = 0; i < 7; i++) {
+                    uint8_t offset = 4 + i * 4;
+                    arm_pwms[i] = *((uint32_t *)&command[offset]);
+                }
+            default:
+                break;
+            }
+        }
 
         // SERVO SETTING
         for (uint8_t i = 0; i < 7; i++) {
@@ -776,38 +804,7 @@ void StartHandleUART(void *argument) {
     /* Infinite loop */
     // the timing of this loop is determined by the host. We assume it's 20ms (is that scuffed? idk)
     for (;;) {
-        // Wait for the UART interrupt to notify this task
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        switch (command[0]) {
-        case CMD_SET_ANGLE:
-            for (uint8_t i = 0; i < 7; i++) {
-                uint8_t offset = 8 + i * 8;
-                double angle = *((double *)&command[offset]);
-                arm_targets[i] = angle;
-                arm_speeds[i] = (arm_targets[i] - arm_angles[i]) / tx_rate;
-
-                // limit arm speed (especially for arm up/down switching movements)
-                arm_speeds[i] = (arm_speeds[i] > max_speed_abs) ? max_speed_abs : arm_speeds[i];
-                arm_speeds[i] = (arm_speeds[i] < -max_speed_abs) ? -max_speed_abs : arm_speeds[i];
-            }
-            break;
-        case CMD_SET_PWM:
-            for (uint8_t i = 0; i < 7; i++) {
-                uint8_t offset = 4 + i * 4;
-                arm_pwms[i] = *((uint32_t *)&command[offset]);
-            }
-        default:
-            break;
-        }
-
-        // Wait for the UART reception to complete before starting a new reception
-        while (!uart_rx_complete) {
-            taskYIELD();
-        }
-        uart_rx_complete = 0;
-
-        HAL_UART_Receive_IT(&huart2, command, CMD_LEN);
+        osDelay(50);
     }
     /* USER CODE END StartHandleUART */
 }
