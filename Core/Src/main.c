@@ -572,13 +572,14 @@ static void MX_TIM4_Init(void) {
     if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
         Error_Handler();
     }
-    sConfigOC.OCMode = TIM_OCMODE_TIMING;
     sConfigOC.Pulse = 500 + nudges[5] + (arm_angles[5] + shifts[5]) * 2000.0 / ranges[5];
-    if (HAL_TIM_OC_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK) {
+    if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+    {
         Error_Handler();
     }
     sConfigOC.Pulse = 500 + nudges[6] + (arm_angles[6] + shifts[6]) * 2000.0 / ranges[6];
-    if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK) {
+    if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+    {
         Error_Handler();
     }
     /* USER CODE BEGIN TIM4_Init 2 */
